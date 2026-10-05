@@ -1,0 +1,19 @@
+{
+  "name": "orbit-ide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orbit IDE: an offline code editor with Claude, Codex, Grok and OpenRouter built in.",
+  "scripts": {
+    "vendor": "sh scripts/vendor.sh",
+    "dev": "sh run.sh",
+    "build": "sh build_orbit_ide_dmg.sh",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-web-links": "0.12.0",
+    "@xterm/xterm": "6.0.0",
+    "monaco-editor": "0.57.0"
+  }
+}

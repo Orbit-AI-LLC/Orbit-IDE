@@ -1,0 +1,61 @@
+name: Build macOS app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Orbit IDE.app and DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install page libraries
+        run: |
+          npm ci
+          sh scripts/vendor.sh
+
+      - name: Build app and DMG
+        run: sh build_orbit_ide_dmg.sh
+
+      - name: Zip the app bundle
+        run: |
+          cd "src-tauri/target/release/bundle/macos"
+          ditto -c -k --keepParent "Orbit IDE.app" "$GITHUB_WORKSPACE/dist/Orbit-IDE.app.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbit-IDE-macOS
+          path: |
+            dist/OrbitIDE.dmg
+            dist/Orbit-IDE.app.zip
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/OrbitIDE.dmg
+            dist/Orbit-IDE.app.zip
+          generate_release_notes: true

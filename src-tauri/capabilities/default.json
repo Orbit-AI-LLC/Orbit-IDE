@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "The bundled Orbit IDE page.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-set-title",
+    "dialog:default"
+  ]
+}

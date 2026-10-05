@@ -1,0 +1,29 @@
+[package]
+name = "orbit-ide"
+version = "0.1.0"
+description = "Orbit IDE: an offline code editor with Claude, Codex, Grok and OpenRouter built in."
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+portable-pty = "0.9"
+base64 = "0.22"
+ureq = { version = "2", features = ["json"] }
+notify = "8"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+# Proc-macro libraries built by the release profile are stripped, and current
+# macOS refuses to load them ("mis-aligned LINKEDIT string pool"), so a clean
+# release build fails. Build-time crates are never shipped; leave them unstripped.
+[profile.release.build-override]
+strip = false
