@@ -28,6 +28,7 @@ Body:
 Format:
 - Plain text only: no markdown, no code fences, no quotes around the message, no heading such as \"Commit message:\", and nothing after the message.
 - Never mention the diff, this prompt, the tool or yourself.
+- No trailers of any kind: no Co-authored-by, Signed-off-by, Generated-by or similar lines, and no attribution to an AI, a model or a tool. The author is the person committing.
 
 Output only the commit message.";
 

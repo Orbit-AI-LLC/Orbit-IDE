@@ -361,7 +361,10 @@ export function cleanMessage(raw) {
   text = text.replace(/^```[a-z]*\n([\s\S]*?)\n```$/i, "$1").trim();
   text = text.replace(/^(commit message|message)\s*:\s*/i, "").trim();
   if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) text = text.slice(1, -1).trim();
-  const lines = text.split("\n");
+  // Trailers that attribute the commit to a tool, whatever the instructions said.
+  const trailer = /^\s*(co-authored-by|signed-off-by|generated-by|generated-with|authored-by|assisted-by)\s*:/i;
+  const lines = text.split("\n").filter((line) => !trailer.test(line) && !/generated with \[?claude|🤖 generated/i.test(line));
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
   if (lines.length > 1 && lines[1].trim() !== "") lines.splice(1, 0, "");
   return lines.join("\n").trim();
 }
