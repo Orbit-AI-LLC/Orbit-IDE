@@ -268,7 +268,48 @@ fn ai_cancel(state: State<'_, ai::ChatState>, id: String) {
     ai::cancel(&state, &id);
 }
 
+/// Writes every panic to panic.log in the app's data folder, so a crash can
+/// be diagnosed from a Finder-launched app that has no terminal.
+fn install_panic_log() {
+    let dir = dirs_fallback();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = match info.payload().downcast_ref::<&str>() {
+            Some(s) => s.to_string(),
+            None => info.payload().downcast_ref::<String>().cloned().unwrap_or_else(|| "panic".to_string()),
+        };
+        let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let line = format!("[{}] panic: {message} at {location}\n{backtrace}\n\n", chrono_like_now());
+        eprintln!("{line}");
+        if let Some(dir) = &dir {
+            let _ = std::fs::create_dir_all(dir);
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("panic.log")) {
+                use std::io::Write;
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
+    }));
+}
+
+fn dirs_fallback() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let home = std::path::PathBuf::from(home);
+    Some(if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/ai.com.orbit.ide")
+    } else if cfg!(windows) {
+        home.join("AppData/Roaming/ai.com.orbit.ide")
+    } else {
+        home.join(".local/share/ai.com.orbit.ide")
+    })
+}
+
+fn chrono_like_now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("unix {secs}")
+}
+
 fn main() {
+    install_panic_log();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(pty::PtyState::default())
