@@ -35,6 +35,7 @@ struct AppInfo {
     shell: String,
     path: String,
     selftest: bool,
+    os: String,
 }
 
 #[tauri::command]
@@ -45,6 +46,7 @@ fn app_info(app: AppHandle) -> AppInfo {
         shell: shell::user_shell(),
         path: shell::login_path().to_string(),
         selftest: std::env::var_os("ORBIT_IDE_SELFTEST").is_some(),
+        os: std::env::consts::OS.to_string(),
     }
 }
 

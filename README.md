@@ -88,11 +88,19 @@ The mark is the Orbit family's comet orbit with a pair of code chevrons in
 the centre. `python3 scripts/build_icon.py` regenerates every size from
 `scripts/orbitmark.swift`; never edit the generated files by hand.
 
-## Continuous builds
+## Continuous builds and releases
 
-Every push to `main` runs `.github/workflows/build-macos.yml` on a macOS
-runner and attaches `OrbitIDE.dmg` and a zipped `Orbit IDE.app` to the
-workflow run as the `Orbit-IDE-macOS` artifact. Pushing a tag such as
-`v0.1.0` also publishes them on a GitHub release. The build is ad-hoc
-signed and not notarized; add Apple signing secrets to the workflow if a
-notarized build is wanted.
+Every push to `main` runs `.github/workflows/build.yml`, which builds the
+app on a macOS runner and a Windows runner and publishes a GitHub release
+tagged `v<version>-build.<run number>` (marked as a pre-release) with:
+
+* `OrbitIDE.dmg` and `Orbit-IDE-macOS.app.zip` for the Mac
+* `Orbit-IDE-Windows-Setup.exe` (installer) and
+  `Orbit-IDE-Windows-portable.exe` for Windows
+
+Pushing a tag such as `v0.2.0` publishes a full release under that tag.
+The Mac build is ad-hoc signed and not notarized; the Windows build is
+unsigned. Add signing secrets to the workflow for signed builds.
+
+On Windows the agents run through `cmd.exe` so the npm-installed `claude`,
+`codex` and `grok` launchers resolve, and the terminal is PowerShell.

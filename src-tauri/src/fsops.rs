@@ -96,13 +96,14 @@ pub fn rename(from: &str, to: &str) -> Result<(), String> {
     fs::rename(from, to).map_err(|e| format!("{from}: {e}"))
 }
 
-/// Moves the item to the Trash; deletes outright only when the Trash is on
-/// another volume and the move fails.
+/// Moves the item to the Trash on macOS; deletes outright elsewhere or when
+/// the Trash is on another volume and the move fails.
 pub fn delete(path: &str) -> Result<(), String> {
     let source = PathBuf::from(path);
     if !source.exists() && fs::symlink_metadata(&source).is_err() {
         return Err(format!("{path} does not exist"));
     }
+    #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
         let trash = PathBuf::from(home).join(".Trash");
         if trash.is_dir() {
@@ -126,11 +127,26 @@ pub fn delete(path: &str) -> Result<(), String> {
 }
 
 pub fn reveal(path: &str) -> Result<(), String> {
-    std::process::Command::new("open").arg("-R").arg(path).status().map(|_| ()).map_err(|e| e.to_string())
+    let status = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg("-R").arg(path).status()
+    } else if cfg!(windows) {
+        std::process::Command::new("explorer.exe").arg(format!("/select,{path}")).status()
+    } else {
+        let dir = Path::new(path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+        std::process::Command::new("xdg-open").arg(dir).status()
+    };
+    status.map(|_| ()).map_err(|e| e.to_string())
 }
 
 pub fn open_external(target: &str) -> Result<(), String> {
-    std::process::Command::new("open").arg(target).status().map(|_| ()).map_err(|e| e.to_string())
+    let status = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(target).status()
+    } else if cfg!(windows) {
+        std::process::Command::new("cmd.exe").args(["/d", "/c", "start", "", target]).status()
+    } else {
+        std::process::Command::new("xdg-open").arg(target).status()
+    };
+    status.map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Every file under `root` for quick-open. Uses git's index when the folder is
@@ -175,7 +191,8 @@ pub fn walk(root: &str, limit: usize) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Finds text in the project with `git grep` or plain `grep`.
+/// Finds text in the project: a case-insensitive substring search over text
+/// files, skipping the usual generated folders.
 #[derive(Serialize)]
 pub struct Hit {
     pub path: String,
@@ -184,30 +201,47 @@ pub struct Hit {
 }
 
 pub fn search(root: &str, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
-    if query.trim().is_empty() {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
         return Ok(Vec::new());
     }
-    let mut cmd = crate::shell::command("grep");
-    cmd.args(["-rnI", "--fixed-strings", "--ignore-case", "--color=never"]);
-    for skip in SKIP_DIRS {
-        cmd.arg(format!("--exclude-dir={skip}"));
-    }
-    cmd.arg("--").arg(query).arg(".").current_dir(root);
-    let out = cmd.output().map_err(|e| e.to_string())?;
+    let root_path = Path::new(root);
     let mut hits = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut parts = line.splitn(3, ':');
-        let (Some(path), Some(no), Some(text)) = (parts.next(), parts.next(), parts.next()) else { continue };
-        let Ok(line_no) = no.parse::<u32>() else { continue };
-        hits.push(Hit {
-            path: path.trim_start_matches("./").to_string(),
-            line: line_no,
-            text: text.trim().chars().take(240).collect(),
-        });
-        if hits.len() >= limit {
-            break;
+    fn visit(dir: &Path, root: &Path, needle: &str, hits: &mut Vec<Hit>, limit: usize) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            if hits.len() >= limit {
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            let Ok(meta) = fs::metadata(&path) else { continue };
+            if meta.is_dir() {
+                if SKIP_DIRS.contains(&name.as_str()) || name == ".git" {
+                    continue;
+                }
+                visit(&path, root, needle, hits, limit);
+            } else if meta.len() <= 2 * 1024 * 1024 {
+                let Ok(bytes) = fs::read(&path) else { continue };
+                if bytes[..bytes.len().min(8192)].contains(&0) {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(&bytes);
+                let rel = path.strip_prefix(root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                for (i, line) in text.lines().enumerate() {
+                    if line.to_lowercase().contains(needle) {
+                        hits.push(Hit { path: rel.clone(), line: i as u32 + 1, text: line.trim().chars().take(240).collect() });
+                        if hits.len() >= limit {
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
+    visit(root_path, root_path, &needle, &mut hits, limit);
     Ok(hits)
 }
 

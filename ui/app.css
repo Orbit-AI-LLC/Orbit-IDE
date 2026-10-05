@@ -92,6 +92,8 @@ kbd { font: 11px var(--mono); background: var(--bg-raised); border: 1px solid va
 .icon-btn.active { color: var(--accent); }
 .icon-btn.sm { width: 20px; height: 20px; font-size: 13px; }
 
+[data-os="windows"] .titlebar, [data-os="linux"] .titlebar { padding-left: 12px; }
+
 /* Body */
 .body { display: flex; flex: 1; min-height: 0; }
 .activity { width: var(--activity); flex: 0 0 var(--activity); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 4px; background: var(--bg); border-right: 1px solid var(--border); }

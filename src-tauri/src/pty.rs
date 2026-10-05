@@ -41,21 +41,36 @@ pub fn spawn(app: &AppHandle, state: &PtyState, cwd: &str, program: Option<Strin
     let pair = pty.openpty(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
 
     let shell = crate::shell::user_shell();
-    let mut cmd = CommandBuilder::new(&shell);
-    match program {
-        Some(program) => {
-            // The login shell sets up the user's environment, then becomes the agent.
-            cmd.arg("-lc");
-            cmd.arg("exec \"$0\" \"$@\"");
-            cmd.arg(program);
-            for a in args {
-                cmd.arg(a);
+    let mut cmd = if cfg!(windows) {
+        match program {
+            Some(program) => {
+                let mut cmd = CommandBuilder::new("cmd.exe");
+                cmd.args(["/d", "/c", &program]);
+                for a in args {
+                    cmd.arg(a);
+                }
+                cmd
+            }
+            None => CommandBuilder::new(&shell),
+        }
+    } else {
+        let mut cmd = CommandBuilder::new(&shell);
+        match program {
+            Some(program) => {
+                // The login shell sets up the user's environment, then becomes the agent.
+                cmd.arg("-lc");
+                cmd.arg("exec \"$0\" \"$@\"");
+                cmd.arg(program);
+                for a in args {
+                    cmd.arg(a);
+                }
+            }
+            None => {
+                cmd.arg("-l");
             }
         }
-        None => {
-            cmd.arg("-l");
-        }
-    }
+        cmd
+    };
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");

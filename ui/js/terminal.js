@@ -2,7 +2,7 @@
 // the bottom shell panel and for the agent CLIs in the AI dock.
 import { api, listen } from "./api.js";
 import { state, on, view } from "./state.js";
-import { $, el, toast, formatError } from "./ui.js";
+import { $, el, toast, formatError, basename } from "./ui.js";
 import { Terminal } from "../vendor/xterm/xterm.mjs";
 import { FitAddon } from "../vendor/xterm/addon-fit.mjs";
 import { WebLinksAddon } from "../vendor/xterm/addon-web-links.mjs";
@@ -143,7 +143,8 @@ export function toggleTerminalPanel(force) {
 export async function newShell() {
   const v = view();
   if (!v) { toast("Open a project first."); return; }
-  const shell = { id: null, title: `zsh ${v.shells.length + 1}`, term: null };
+  const shellName = state.info && state.info.shell ? basename(state.info.shell).replace(/\.exe$/i, "") : "shell";
+  const shell = { id: null, title: `${shellName} ${v.shells.length + 1}`, term: null };
   shell.term = new Term({ cwd: v.path, host: body, onExit: () => closeShell(v, shell) });
   v.shells.push(shell);
   v.activeShell = shell;

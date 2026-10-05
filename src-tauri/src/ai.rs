@@ -9,8 +9,7 @@
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -59,6 +58,7 @@ pub fn providers(settings: &Settings) -> Vec<Provider> {
 /// Runs `cmd` with `stdin` on its input, kills it after the timeout, and
 /// returns stdout (or an error with stderr).
 fn run_with_input(mut cmd: Command, stdin: Option<&str>) -> Result<String, String> {
+    use std::io::Read;
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {:?}: {e}", cmd.get_program()))?;
     if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
@@ -67,27 +67,33 @@ fn run_with_input(mut cmd: Command, stdin: Option<&str>) -> Result<String, Strin
             let _ = pipe.write_all(text.as_bytes());
         });
     }
-    let pid = child.id();
-    let done = Arc::new(AtomicBool::new(false));
-    let flag = done.clone();
-    std::thread::spawn(move || {
-        let start = std::time::Instant::now();
-        while start.elapsed() < COMPLETION_TIMEOUT {
-            if flag.load(Ordering::Relaxed) {
-                return;
+    let mut out_pipe = child.stdout.take().ok_or("no stdout")?;
+    let mut err_pipe = child.stderr.take().ok_or("no stderr")?;
+    let out_thread = std::thread::spawn(move || { let mut b = Vec::new(); let _ = out_pipe.read_to_end(&mut b); b });
+    let err_thread = std::thread::spawn(move || { let mut b = Vec::new(); let _ = err_pipe.read_to_end(&mut b); b });
+    let start = std::time::Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() > COMPLETION_TIMEOUT {
+                    let _ = child.kill();
+                    timed_out = true;
+                    break child.wait().map_err(|e| e.to_string())?;
+                }
+                std::thread::sleep(Duration::from_millis(100));
             }
-            std::thread::sleep(Duration::from_millis(250));
+            Err(e) => return Err(e.to_string()),
         }
-        let _ = Command::new("kill").arg(pid.to_string()).status();
-    });
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    done.store(true, Ordering::Relaxed);
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    if out.status.success() {
+    };
+    let stdout = String::from_utf8_lossy(&out_thread.join().unwrap_or_default()).to_string();
+    let stderr = String::from_utf8_lossy(&err_thread.join().unwrap_or_default()).to_string();
+    if timed_out {
+        return Err("The provider took too long and was stopped.".to_string());
+    }
+    if status.success() {
         Ok(stdout)
-    } else if out.status.code().is_none() {
-        Err("The provider took too long and was stopped.".to_string())
     } else {
         let msg = if stderr.trim().is_empty() { stdout } else { stderr };
         Err(msg.trim().chars().take(2000).collect())
@@ -136,7 +142,8 @@ pub fn complete(provider: &str, prompt: &str, cwd: &str, model: Option<&str>, se
 }
 
 fn openrouter_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(20)).timeout_read(Duration::from_secs(300)).build()
+    let tls = std::sync::Arc::new(native_tls::TlsConnector::new().expect("TLS"));
+    ureq::AgentBuilder::new().tls_connector(tls).timeout_connect(Duration::from_secs(20)).timeout_read(Duration::from_secs(300)).build()
 }
 
 fn openrouter_complete(settings: &Settings, model: &str, prompt: &str) -> Result<String, String> {

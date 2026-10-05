@@ -12,6 +12,7 @@ import { openSettings } from "./settings.js";
 async function boot() {
   await loadSettings();
   state.info = await api.appInfo().catch(() => null);
+  if (state.info) document.body.dataset.os = state.info.os;
   applyTheme(state.settings.theme);
   applySizes();
   await initEditor();
