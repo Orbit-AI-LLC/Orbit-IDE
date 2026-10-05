@@ -1,7 +1,8 @@
-// The source control sidebar: branch, sync, staging, diffs, commits, and the
-// AI-written commit message.
+// The source control sidebar: branch, sync, a single changes list with
+// checkboxes (checked means staged), diffs, commits, and the AI-written
+// commit message.
 import { api } from "./api.js";
-import { state, view, saveSettings, emit, on, provider, projectName } from "./state.js";
+import { state, view, saveSettings, emit, on, provider, projectName, commitInstructions } from "./state.js";
 import { $, el, basename, dirname, joinPath, toast, formatError, contextMenu, confirmDialog, promptDialog, debounce } from "./ui.js";
 import { openFile, openDiff, languageFor, saveAll } from "./editor.js";
 import { setGitDecorations } from "./explorer.js";
@@ -60,6 +61,21 @@ function updateStatusBar(status) {
   badge.textContent = count > 99 ? "99+" : String(count);
 }
 
+/// "+12 −3" in green and red.
+function counter(add, del, cls = "") {
+  return el("span", { class: `linecount ${cls}`, title: `${add} lines added, ${del} removed` }, [
+    el("span", { class: "add", text: `+${add}` }),
+    el("span", { class: "del", text: `−${del}` }),
+  ]);
+}
+
+function stagedState(entry) {
+  if (entry.conflicted) return "conflict";
+  if (entry.staged && !entry.unstaged) return "all";
+  if (entry.staged && entry.unstaged) return "part";
+  return "none";
+}
+
 function render() {
   const v = view();
   host.innerHTML = "";
@@ -75,83 +91,86 @@ function render() {
     ]));
     return;
   }
-  const staged = status.entries.filter((e) => e.staged);
-  const changes = status.entries.filter((e) => e.unstaged);
+  const entries = status.entries;
+  const selected = entries.filter((e) => e.staged);
+  const totals = entries.reduce((t, e) => { t.add += e.add; t.del += e.del; return t; }, { add: 0, del: 0 });
   const wrap = el("div", { class: "git-panel" });
 
   // Branch and sync.
-  const branchBtn = el("button", { class: "branch-btn", title: "Switch branch" }, [el("span", { text: status.branch }), el("span", { text: "▾", style: "font-size:10px;color:var(--text-faint)" })]);
+  const branchBtn = el("button", { class: "branch-btn", title: "Switch branch" }, [el("span", { text: status.branch }), el("span", { class: "caret", text: "▾" })]);
   branchBtn.addEventListener("click", () => branchMenu(branchBtn));
   const sync = el("div", { class: "git-sync" }, [
     el("button", { class: "icon-btn", title: "Fetch", text: "↻", onclick: () => sync_(() => api.gitFetch(status.root), "Fetched.") }),
     el("button", { class: "icon-btn", title: "Pull", onclick: () => sync_(() => api.gitPull(status.root), "Pulled.") }, [`↓${status.behind ? " " + status.behind : ""}`]),
     el("button", { class: "icon-btn", title: status.upstream ? "Push" : "Publish branch", onclick: () => sync_(() => api.gitPush(status.root), "Pushed.") }, [`↑${status.ahead ? " " + status.ahead : ""}`]),
   ]);
-  const totals = (list, staged) => list.reduce((t, e) => { t.add += staged ? e.staged_add : e.work_add; t.del += staged ? e.staged_del : e.work_del; return t; }, { add: 0, del: 0 });
-  const all = { add: totals(staged, true).add + totals(changes, false).add, del: totals(staged, true).del + totals(changes, false).del };
-  const top = el("div", { class: "git-top" }, [
-    el("div", { class: "git-branch-row" }, [branchBtn, sync]),
-    status.entries.length ? el("div", { class: "git-summary" }, [
-      el("span", { text: `${status.entries.length} ${status.entries.length === 1 ? "file" : "files"} changed` }),
-      counter(all.add, all.del),
-    ]) : null,
-  ]);
+  const top = el("div", { class: "git-top" }, [el("div", { class: "git-branch-row" }, [branchBtn, sync])]);
 
   // Commit box.
-  const textarea = el("textarea", { placeholder: `Message (⌘Enter to commit on ${status.branch})`, spellcheck: "true" });
+  const textarea = el("textarea", { placeholder: selected.length ? `Message for ${selected.length} ${selected.length === 1 ? "file" : "files"} (⌘Enter to commit)` : "Select files below, then write or generate a message", spellcheck: "true" });
   textarea.value = v.commitDraft || "";
   textarea.addEventListener("input", () => { v.commitDraft = textarea.value; });
   textarea.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); doCommit(textarea, false); }
   });
-  const providerSelect = el("select", { title: "Provider that writes the message" });
-  for (const p of state.providers) providerSelect.append(el("option", { value: p.id, text: p.name + (p.available ? "" : " (not set up)") }));
-  providerSelect.value = state.settings.commit_provider || "claude";
-  if (!state.providers.some((p) => p.id === providerSelect.value) && state.providers.length) providerSelect.value = state.providers[0].id;
-  providerSelect.addEventListener("change", () => saveSettings({ commit_provider: providerSelect.value }));
-  const generateBtn = el("button", { class: `btn ${generating ? "busy" : ""}`, title: "Write the commit message from the staged changes", disabled: generating }, [generating ? "Writing…" : "✦ Generate"]);
-  generateBtn.addEventListener("click", () => generateMessage(textarea, providerSelect.value, generateBtn));
-  const commitBtn = el("button", { class: "btn primary", text: "Commit", disabled: busy, onclick: () => doCommit(textarea, false) });
-  const moreBtn = el("button", { class: "btn primary", text: "▾", title: "More", onclick: (event) => {
+  const currentProvider = provider(state.settings.commit_provider) || state.providers[0] || { id: "claude", name: "Claude" };
+  const generateBtn = el("button", { class: `btn ${generating ? "busy" : ""}`, title: `Write the message from the selected changes with ${currentProvider.name}`, disabled: generating }, [generating ? "Writing…" : "✦ Generate"]);
+  generateBtn.addEventListener("click", () => generateMessage(textarea, currentProvider.id));
+  const providerBtn = el("button", { class: "btn", title: "Provider that writes the message", disabled: generating }, [el("span", { class: "ellipsis", text: currentProvider.name }), el("span", { class: "caret", text: "▾" })]);
+  providerBtn.addEventListener("click", () => {
+    const rect = providerBtn.getBoundingClientRect();
+    contextMenu(rect.left, rect.bottom + 4, state.providers.map((p) => ({
+      label: `${p.id === currentProvider.id ? "✓ " : ""}${p.name}${p.available ? "" : "  (not set up)"}`,
+      action: () => { saveSettings({ commit_provider: p.id }); render(); },
+    })));
+  });
+  const commitBtn = el("button", { class: "btn primary", disabled: busy || generating, onclick: () => doCommit(textarea, false) }, [busy ? "Working…" : selected.length ? `Commit ${selected.length} ${selected.length === 1 ? "file" : "files"}` : "Commit"]);
+  const moreBtn = el("button", { class: "btn primary caret-btn", text: "▾", title: "More ways to commit", disabled: busy, onclick: () => {
     const rect = moreBtn.getBoundingClientRect();
-    contextMenu(rect.left, rect.bottom + 4, [
+    contextMenu(rect.right - 200, rect.bottom + 4, [
       { label: "Commit", action: () => doCommit(textarea, false) },
       { label: "Commit and push", action: () => doCommit(textarea, true) },
       { label: "Amend last commit", action: async () => {
-        if (await confirmDialog("Amend the last commit?", "The staged changes and this message replace the previous commit. Avoid this on a pushed branch.", { ok: "Amend" })) commitWith(textarea, { amend: true });
+        if (await confirmDialog("Amend the last commit?", "The selected changes and this message replace the previous commit. Avoid this on a pushed branch.", { ok: "Amend" })) commitWith(textarea, { amend: true });
       } },
       { separator: true },
-      { label: "Stage all and commit", action: async () => { await api.gitStage(status.root, []); await refreshGit(); doCommit(textarea, false); } },
+      { label: "Select all and commit", action: async () => { await api.gitStage(status.root, []); await refreshGit(); doCommit(host.querySelector("textarea") || textarea, false); } },
     ]);
   } });
   top.append(el("div", { class: "commit-box" }, [
     textarea,
-    el("div", { class: "commit-row" }, [providerSelect, generateBtn, el("div", { class: "split-btn" }, [commitBtn, moreBtn])]),
+    el("div", { class: "commit-row split" }, [generateBtn, providerBtn]),
+    el("div", { class: "commit-row split" }, [commitBtn, moreBtn]),
   ]));
   wrap.append(top);
 
-  // Lists.
-  const lists = el("div", { class: "panel-body", style: "padding-bottom:12px" });
-  if (status.entries.length === 0) lists.append(el("div", { class: "git-empty", text: "No changes." }));
-  if (staged.length) {
-    lists.append(sectionHeader("Staged changes", staged.length, totals(staged, true), [
-      el("button", { class: "icon-btn sm", title: "Unstage all", text: "−", onclick: () => act(() => api.gitUnstage(status.root, [])) }),
+  // The changes list.
+  const lists = el("div", { class: "panel-body git-lists" });
+  if (!entries.length) lists.append(el("div", { class: "git-empty", text: "No changes." }));
+  else {
+    const allState = entries.every((e) => stagedState(e) === "all") ? "all" : entries.some((e) => e.staged) ? "part" : "none";
+    const master = el("input", { type: "checkbox", title: allState === "all" ? "Unselect all" : "Select all" });
+    master.checked = allState === "all";
+    master.indeterminate = allState === "part";
+    master.addEventListener("change", () => act(() => allState === "all" ? api.gitUnstage(status.root, []) : api.gitStage(status.root, [])));
+    lists.append(el("div", { class: "git-section-header" }, [
+      master,
+      el("span", { text: "Changes" }),
+      el("span", { class: "count", text: `${selected.length}/${entries.length}` }),
+      counter(totals.add, totals.del),
+      el("div", { class: "panel-actions" }, [
+        el("button", { class: "icon-btn sm", title: "Discard all changes", text: "↶", onclick: () => discard(status, entries.filter((e) => !e.conflicted)) }),
+      ]),
     ]));
-    for (const entry of staged) lists.append(row(status, entry, true));
-  }
-  if (changes.length) {
-    lists.append(sectionHeader("Changes", changes.length, totals(changes, false), [
-      el("button", { class: "icon-btn sm", title: "Discard all changes", text: "↶", onclick: () => discard(status, changes) }),
-      el("button", { class: "icon-btn sm", title: "Stage all", text: "+", onclick: () => act(() => api.gitStage(status.root, [])) }),
-    ]));
-    for (const entry of changes) lists.append(row(status, entry, false));
+    for (const entry of entries) lists.append(row(status, entry));
   }
   // Recent commits.
   const log = v.log || [];
   if (log.length) {
-    const header = sectionHeader(`Commits`, log.length, null, []);
-    header.style.cursor = "default";
-    header.insertBefore(el("span", { class: "tree-arrow", text: "▶", style: showLog ? "transform:rotate(90deg);margin-left:-10px" : "margin-left:-10px" }), header.firstChild);
+    const header = el("div", { class: "git-section-header clickable" }, [
+      el("span", { class: "tree-arrow", text: "▶", style: showLog ? "transform:rotate(90deg)" : "" }),
+      el("span", { text: "Commits" }), el("span", { class: "count", text: log.length }),
+    ]);
     header.addEventListener("click", () => { showLog = !showLog; render(); });
     lists.append(header);
     if (showLog) for (const c of log) {
@@ -162,47 +181,38 @@ function render() {
   host.append(wrap);
 }
 
-function sectionHeader(title, count, stats, actions) {
-  return el("div", { class: "git-section-header" }, [el("span", { text: title }), el("span", { class: "count", text: count }), stats ? counter(stats.add, stats.del) : null, el("div", { class: "panel-actions" }, actions)]);
-}
-
-/// "+12 −3" in green and red.
-function counter(add, del) {
-  return el("span", { class: "linecount", title: `${add} lines added, ${del} removed` }, [
-    el("span", { class: "add", text: `+${add}` }),
-    el("span", { class: "del", text: `−${del}` }),
-  ]);
-}
-
-function row(status, entry, staged) {
+function row(status, entry) {
   const v = view();
   const abs = joinPath(status.root, entry.path);
-  const letter = entry.untracked ? "U" : entry.conflicted ? "C" : (staged ? entry.index : entry.worktree);
+  const letter = entry.untracked ? "U" : entry.conflicted ? "C" : (entry.worktree !== " " ? entry.worktree : entry.index);
   const dir = dirname(entry.path);
-  const add = staged ? entry.staged_add : entry.work_add;
-  const del = staged ? entry.staged_del : entry.work_del;
-  const node = el("div", { class: `git-row ${v.gitSelected === staged + entry.path ? "selected" : ""}`, title: entry.path }, [
+  const sel = stagedState(entry);
+  const box = el("input", { type: "checkbox", title: sel === "conflict" ? "Resolve the conflict first" : sel === "all" ? "Unselect (unstage)" : "Select for commit (stage)" });
+  box.checked = sel === "all";
+  box.indeterminate = sel === "part";
+  box.disabled = sel === "conflict";
+  box.addEventListener("click", (event) => event.stopPropagation());
+  box.addEventListener("change", () => act(() => sel === "all" ? api.gitUnstage(status.root, [entry.path]) : api.gitStage(status.root, [entry.path])));
+  const node = el("div", { class: `git-row ${v.gitSelected === entry.path ? "selected" : ""} ${sel === "all" ? "checked" : ""}`, title: entry.path }, [
+    box,
     el("span", { class: "name", text: basename(entry.path) }),
     el("span", { class: "dir", text: dir === "/" || dir === "." ? "" : dir }),
-    add || del ? counter(add, del) : null,
+    entry.add || entry.del ? counter(entry.add, entry.del) : null,
     el("span", { class: "row-actions" }, [
       el("button", { class: "icon-btn sm", title: "Open file", text: "↗", onclick: (event) => { event.stopPropagation(); openFile(abs); } }),
-      !staged && !entry.conflicted ? el("button", { class: "icon-btn sm", title: "Discard changes", text: "↶", onclick: (event) => { event.stopPropagation(); discard(status, [entry]); } }) : null,
-      staged
-        ? el("button", { class: "icon-btn sm", title: "Unstage", text: "−", onclick: (event) => { event.stopPropagation(); act(() => api.gitUnstage(status.root, [entry.path])); } })
-        : el("button", { class: "icon-btn sm", title: "Stage", text: "+", onclick: (event) => { event.stopPropagation(); act(() => api.gitStage(status.root, [entry.path])); } }),
+      !entry.conflicted ? el("button", { class: "icon-btn sm", title: "Discard changes", text: "↶", onclick: (event) => { event.stopPropagation(); discard(status, [entry]); } }) : null,
     ]),
     el("span", { class: `letter s-${letter}`, text: letter }),
   ]);
-  node.addEventListener("click", () => { v.gitSelected = staged + entry.path; showDiff(status, entry, staged); render(); });
+  node.addEventListener("click", () => { v.gitSelected = entry.path; showDiff(status, entry); render(); });
   node.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     contextMenu(event.clientX, event.clientY, [
       { label: "Open file", action: () => openFile(abs) },
-      { label: "Open changes", action: () => showDiff(status, entry, staged) },
+      { label: "Open changes", action: () => showDiff(status, entry) },
       { separator: true },
-      staged ? { label: "Unstage", action: () => act(() => api.gitUnstage(status.root, [entry.path])) } : { label: "Stage", action: () => act(() => api.gitStage(status.root, [entry.path])) },
-      !staged ? { label: "Discard changes", danger: true, action: () => discard(status, [entry]) } : null,
+      sel === "all" ? { label: "Unselect", action: () => act(() => api.gitUnstage(status.root, [entry.path])) } : { label: "Select for commit", action: () => act(() => api.gitStage(status.root, [entry.path])) },
+      { label: "Discard changes", danger: true, action: () => discard(status, [entry]) },
       { separator: true },
       { label: "Reveal in Finder", action: () => api.reveal(abs) },
       { label: "Copy path", action: () => navigator.clipboard.writeText(abs) },
@@ -211,22 +221,18 @@ function row(status, entry, staged) {
   return node;
 }
 
-async function showDiff(status, entry, staged) {
+/// HEAD against the working tree: the whole change for the file.
+async function showDiff(status, entry) {
   const abs = joinPath(status.root, entry.path);
   try {
-    let original = "", modified = "";
-    if (staged) {
-      original = entry.index === "A" ? "" : await api.gitShow(status.root, `HEAD:${entry.orig_path || entry.path}`);
-      modified = entry.index === "D" ? "" : await api.gitShow(status.root, `:${entry.path}`);
-    } else {
-      original = entry.untracked ? "" : await api.gitShow(status.root, `:${entry.path}`);
-      if (entry.worktree !== "D") {
-        const file = await api.read(abs).catch(() => ({ content: "", binary: false }));
-        if (file.binary) { toast("Binary file; no text diff."); return; }
-        modified = file.content;
-      }
+    const original = entry.untracked || entry.index === "A" ? "" : await api.gitShow(status.root, `HEAD:${entry.orig_path || entry.path}`);
+    let modified = "";
+    if (entry.worktree !== "D") {
+      const file = await api.read(abs).catch(() => ({ content: "", binary: false }));
+      if (file.binary) { toast("Binary file; no text diff."); return; }
+      modified = file.content;
     }
-    openDiff({ title: `${basename(entry.path)} (${staged ? "staged" : "working tree"})`, path: abs, original, modified, language: languageFor(abs) });
+    openDiff({ title: `${basename(entry.path)} (changes)`, path: abs, original, modified, language: languageFor(abs) });
   } catch (err) { toast(formatError(err), "error"); }
 }
 
@@ -236,12 +242,16 @@ async function act(fn) {
 }
 
 async function discard(status, entries) {
+  if (!entries.length) return;
   const names = entries.length === 1 ? basename(entries[0].path) : `${entries.length} files`;
-  const ok = await confirmDialog(`Discard changes to ${names}?`, "Working tree changes are thrown away. Untracked files are deleted. This cannot be undone.", { ok: "Discard", danger: true });
+  const ok = await confirmDialog(`Discard changes to ${names}?`, "Working tree changes are thrown away. New files are deleted. This cannot be undone.", { ok: "Discard", danger: true });
   if (!ok) return;
   const tracked = entries.filter((e) => !e.untracked).map((e) => e.path);
   const untracked = entries.filter((e) => e.untracked).map((e) => e.path);
-  await act(() => api.gitDiscard(status.root, tracked, untracked));
+  await act(async () => {
+    if (tracked.length) await api.gitUnstage(status.root, tracked);
+    await api.gitDiscard(status.root, tracked, untracked);
+  });
   emit("fs-discarded", entries.map((e) => joinPath(status.root, e.path)));
 }
 
@@ -262,7 +272,7 @@ async function doCommit(textarea, push) {
   const status = v.git;
   if (!status.entries.some((e) => e.staged)) {
     if (!status.entries.length) { toast("There are no changes to commit."); return; }
-    const ok = await confirmDialog("Nothing is staged", "Stage all changes and commit them?", { ok: "Stage all and commit" });
+    const ok = await confirmDialog("No files are selected", "Select all changes and commit them?", { ok: "Select all and commit" });
     if (!ok) return;
     await api.gitStage(status.root, []).catch((err) => toast(formatError(err), "error"));
   }
@@ -291,45 +301,44 @@ async function commitWith(textarea, { push = false, amend = false } = {}) {
 
 // ---- AI commit message -----------------------------------------------------------
 
-export async function generateMessage(textarea, providerId, button) {
+export async function generateMessage(textarea, providerId) {
   const v = view();
   const status = v.git;
   if (!status || !status.is_repo || generating) return;
   const p = provider(providerId);
   if (p && !p.available) { toast(`${p.name}: ${p.detail}`, "error"); return; }
-  let staged = status.entries.filter((e) => e.staged);
-  if (!staged.length) {
+  if (!status.entries.some((e) => e.staged)) {
     if (!status.entries.length) { toast("There are no changes to describe."); return; }
-    const ok = await confirmDialog("Nothing is staged", "Stage all changes and write a message for them?", { ok: "Stage all" });
+    const ok = await confirmDialog("No files are selected", "Select all changes and write a message for them?", { ok: "Select all" });
     if (!ok) return;
     try { await api.gitStage(status.root, []); } catch (err) { toast(formatError(err), "error"); return; }
     await refreshGit();
-    staged = view().git.entries.filter((e) => e.staged);
-    textarea = host.querySelector("textarea") || textarea;
   }
+  const current = view().git;
+  const selected = current.entries.filter((e) => e.staged);
+  const left = current.entries.filter((e) => !e.staged);
   generating = true;
   render();
-  textarea = host.querySelector("textarea") || textarea;
   try {
-    let diff = await api.gitDiffAll(status.root, true);
+    let diff = await api.gitDiffAll(current.root, true);
     if (diff.length > MAX_DIFF_CHARS) diff = diff.slice(0, MAX_DIFF_CHARS) + "\n\n[diff truncated: the change is larger than shown]";
-    const prompt = buildPrompt({ status, staged, diff, log: v.log || [] });
-    const raw = await api.aiComplete(providerId, prompt, status.root, null);
+    const prompt = buildPrompt({ status: current, selected, left, diff, log: v.log || [] });
+    const raw = await api.aiComplete(providerId, prompt, current.root, null);
     const message = cleanMessage(raw);
     if (!message) throw new Error("The provider returned an empty message.");
     v.commitDraft = message;
-    const current = host.querySelector("textarea");
-    if (current) { current.value = message; current.focus(); }
   } catch (err) { toast(formatError(err), "error"); }
   generating = false;
   render();
+  const box = host.querySelector("textarea");
+  if (box) box.focus();
 }
 
-function buildPrompt({ status, staged, diff, log }) {
-  const instructions = (state.settings.commit_instructions || "").trim();
-  const files = staged.map((e) => `${e.index === "?" ? "A" : e.index} ${e.path}${e.orig_path ? ` (was ${e.orig_path})` : ""}`).join("\n");
+function buildPrompt({ status, selected, left, diff, log }) {
+  const files = selected.map((e) => `${e.index === "?" ? "A" : e.index} ${e.path}${e.orig_path ? ` (was ${e.orig_path})` : ""}  +${e.staged_add} -${e.staged_del}`).join("\n");
   const history = log.slice(0, 12).map((c) => `- ${c.subject}`).join("\n") || "- (no commits yet)";
-  return `${instructions}
+  const excluded = left.length ? `\n\nChanged files NOT in this commit (do not describe them):\n${left.map((e) => `- ${e.path}`).join("\n")}` : "";
+  return `${commitInstructions()}
 
 Repository: ${projectName(status.root)}
 Branch: ${status.branch}
@@ -337,8 +346,8 @@ Branch: ${status.branch}
 Recent commit subjects, newest first (match their style):
 ${history}
 
-Files in this change (status letter, path):
-${files}
+Files in this commit (status letter, path, lines added and removed):
+${files}${excluded}
 
 Staged diff:
 \`\`\`diff
