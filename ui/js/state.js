@@ -21,7 +21,12 @@ export const emit = (name, detail) => bus.dispatchEvent(new CustomEvent(name, { 
 
 export async function loadSettings() {
   state.settings = await api.settingsLoad();
+  state.defaultCommitInstructions = await api.defaultCommitInstructions().catch(() => "");
   return state.settings;
+}
+
+export function commitInstructions() {
+  return (state.settings.commit_instructions || "").trim() || state.defaultCommitInstructions || "";
 }
 
 let saveTimer = null;

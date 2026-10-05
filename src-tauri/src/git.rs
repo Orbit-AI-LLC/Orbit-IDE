@@ -49,6 +49,10 @@ pub struct StatusEntry {
     pub staged_del: u32,
     pub work_add: u32,
     pub work_del: u32,
+    /// Lines added and removed in the working tree against HEAD: the whole
+    /// change, whether staged or not.
+    pub add: u32,
+    pub del: u32,
 }
 
 #[derive(Serialize, Default)]
@@ -118,7 +122,20 @@ pub fn status(repo: &str) -> Result<Status, String> {
 fn add_line_counts(root: &str, status: &mut Status) {
     let staged = numstat(root, true);
     let work = numstat(root, false);
+    let head = numstat_head(root);
     for entry in status.entries.iter_mut() {
+        match head.as_ref().and_then(|h| h.get(&entry.path)) {
+            Some((a, d)) => {
+                entry.add = *a;
+                entry.del = *d;
+            }
+            None => {
+                let (sa, sd) = staged.get(&entry.path).copied().unwrap_or((0, 0));
+                let (wa, wd) = work.get(&entry.path).copied().unwrap_or((0, 0));
+                entry.add = sa + wa;
+                entry.del = sd + wd;
+            }
+        }
         if let Some((a, d)) = staged.get(&entry.path) {
             entry.staged_add = *a;
             entry.staged_del = *d;
@@ -129,14 +146,25 @@ fn add_line_counts(root: &str, status: &mut Status) {
         }
         if entry.untracked {
             entry.work_add = count_lines(&std::path::Path::new(root).join(&entry.path));
+            entry.add = entry.work_add;
         }
     }
+}
+
+fn numstat_head(root: &str) -> Option<std::collections::HashMap<String, (u32, u32)>> {
+    run_bytes(root, &["diff", "HEAD", "--numstat", "-z", "-M"]).ok().map(|raw| parse_numstat(&raw))
 }
 
 fn numstat(root: &str, staged: bool) -> std::collections::HashMap<String, (u32, u32)> {
     let mut out = std::collections::HashMap::new();
     let args: &[&str] = if staged { &["diff", "--cached", "--numstat", "-z", "-M"] } else { &["diff", "--numstat", "-z", "-M"] };
     let Ok(raw) = run_bytes(root, args) else { return out };
+    out = parse_numstat(&raw);
+    out
+}
+
+fn parse_numstat(raw: &[u8]) -> std::collections::HashMap<String, (u32, u32)> {
+    let mut out = std::collections::HashMap::new();
     // Records: "add\tdel\tpath\0" or, for renames, "add\tdel\t\0old\0new\0".
     let fields: Vec<&[u8]> = raw.split(|b| *b == 0).collect();
     let mut i = 0;

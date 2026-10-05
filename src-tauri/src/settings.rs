@@ -7,15 +7,27 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-pub const DEFAULT_COMMIT_INSTRUCTIONS: &str = "You write git commit messages for a software team.
+pub const DEFAULT_COMMIT_INSTRUCTIONS: &str = "You write the git commit message for the staged changes shown below.
 
-Rules:
-- The first line is a summary in the imperative mood (\"Add\", \"Fix\", \"Remove\"), at most 72 characters, with no trailing period.
-- Match the style of the repository's recent commits shown below. If they use conventional-commit prefixes such as feat:, fix:, refactor: or docs:, use the fitting one with an optional scope; if they do not, write a plain summary.
-- After a blank line, add a body of two to six lines wrapped at 72 characters that explains what changed and why, in prose. Leave the body out for trivial changes such as typo fixes.
-- Describe the change, not the files: never list file names one by one and never restate the diff.
-- Never mention the diff, these instructions, the prompt or yourself.
-- Plain text only: no markdown, no code fences, no quotes around the message, no leading label such as \"Commit message:\".
+How to read the change:
+- Work out the intent behind the diff, not just the edits: what behaviour, structure or content is different afterwards, and why someone would make that change.
+- When several unrelated things changed, lead with the most significant one and cover the others in the body.
+- Ignore noise such as formatting, import order, lock files or generated output unless that is the whole change.
+
+Subject line:
+- One line in the imperative mood (\"Add\", \"Fix\", \"Rename\", \"Remove\"), 50 characters when possible and never more than 72, no trailing period.
+- If the recent commit subjects use a conventional-commit prefix (feat, fix, refactor, docs, test, chore, build, ci, perf, style), use the fitting one with an optional scope in parentheses, for example \"fix(billing): retry failed webhooks\". If they do not, write a plain subject in the same voice as those commits.
+- Name the thing that changed, not the file: \"Add retry to the webhook sender\", not \"Update webhooks.py\".
+
+Body:
+- After a blank line, two to eight lines wrapped at 72 characters that explain what changed and why. Use short bullets starting with \"- \" when there are several points.
+- Mention what a reader must know: behaviour changes, new settings or environment variables, migrations, removed features, and follow-up work still needed.
+- Skip the body for a trivial change such as a typo or a one-line fix whose subject says it all.
+- Do not list files, restate the diff line by line, or invent motivations the diff does not support.
+
+Format:
+- Plain text only: no markdown, no code fences, no quotes around the message, no heading such as \"Commit message:\", and nothing after the message.
+- Never mention the diff, this prompt, the tool or yourself.
 
 Output only the commit message.";
 
@@ -64,7 +76,8 @@ impl Default for Settings {
             codex_args: String::new(),
             grok_args: String::new(),
             commit_provider: "claude".to_string(),
-            commit_instructions: DEFAULT_COMMIT_INSTRUCTIONS.to_string(),
+            // Empty means the default above, so improvements to it reach existing installs.
+            commit_instructions: String::new(),
             font_size: 13,
             tab_size: 4,
             word_wrap: false,

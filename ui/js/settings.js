@@ -1,6 +1,6 @@
 // The settings dialog.
 import { api } from "./api.js";
-import { state, saveSettings, refreshProviders } from "./state.js";
+import { state, saveSettings, refreshProviders, commitInstructions } from "./state.js";
 import { $, el, showModal, toast, formatError } from "./ui.js";
 
 let modal = null;
@@ -78,11 +78,13 @@ export function openSettings(page = "general") {
   // Commit
   const providerSelect = el("select");
   for (const p of state.providers) providerSelect.append(el("option", { value: p.id, text: p.name }));
-  const instructions = bind("commit_instructions", el("textarea", { rows: 12, spellcheck: "true", style: "font-family:var(--mono);font-size:12px" }));
+  const instructions = el("textarea", { rows: 14, spellcheck: "true", style: "font-family:var(--mono);font-size:12px" });
+  instructions.value = commitInstructions();
+  instructions.addEventListener("change", () => saveSettings({ commit_instructions: instructions.value.trim() === (state.defaultCommitInstructions || "").trim() ? "" : instructions.value }));
   pages.commit = el("div", { class: "settings-page" }, [
     field("Default provider", bind("commit_provider", providerSelect)),
     field("Instructions", instructions, "Sent before the branch name, recent commit subjects, the file list and the staged diff."),
-    el("div", {}, [el("button", { class: "btn", text: "Reset to default", onclick: async () => { const text = await api.defaultCommitInstructions(); instructions.value = text; saveSettings({ commit_instructions: text }); } })]),
+    el("div", {}, [el("button", { class: "btn", text: "Reset to default", onclick: () => { instructions.value = state.defaultCommitInstructions || ""; saveSettings({ commit_instructions: "" }); } })]),
   ]);
 
   // About
