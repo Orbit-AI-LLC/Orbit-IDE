@@ -79,6 +79,10 @@ async function selfTest() {
     const changes = de && de.getLineChanges();
     const visible = de ? de.getModifiedEditor().getVisibleRanges().length : -1;
     log(`diff tab open=${!$("#diff-editor").hidden} lineChanges=${changes ? changes.length : "null (not computed)"} visibleRanges=${visible} tabs=${v.tabs.length}`);
+    const host = $("#diff-editor");
+    const rect = (n) => { if (!n) return "none"; const r = n.getBoundingClientRect(); return `${Math.round(r.width)}x${Math.round(r.height)}`; };
+    const li = (ed) => { const l = ed.getLayoutInfo(); return `${l.width}x${l.height}`; };
+    log(`diff sizes host=${rect(host)} root=${rect(host.querySelector(".monaco-diff-editor"))} modified=${li(de.getModifiedEditor())} original=${li(de.getOriginalEditor())} viewLines=${host.querySelectorAll(".view-line").length} firstLine=${JSON.stringify((host.querySelector(".view-line") || {}).textContent || "")} inline=${!!host.querySelector(".monaco-diff-editor:not(.side-by-side)")}`);
     const diffTab = v.tabs.find((t) => t.kind === "diff");
     if (diffTab) { try { await closeTab(diffTab.id); log(`diff tab closed cleanly tabs=${v.tabs.length}`); } catch (err) { log(`diff close threw ${formatError(err)}`); } }
   }

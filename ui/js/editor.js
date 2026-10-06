@@ -117,9 +117,13 @@ export function resolveTheme(theme) {
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
+/// Lays both editors out at their host's real size. Without a size Monaco
+/// re-measures its own root, so a size taken while the host was hidden (the
+/// diff editor starts hidden) sticks: the diff drew into a 5px strip.
 export function layout() {
-  if (editor && !editorHost.hidden) editor.layout();
-  if (diffEditor && !diffHost.hidden) diffEditor.layout();
+  const size = (host) => ({ width: host.clientWidth, height: host.clientHeight });
+  if (editor && !editorHost.hidden && editorHost.clientHeight) editor.layout(size(editorHost));
+  if (diffEditor && !diffHost.hidden && diffHost.clientHeight) diffEditor.layout(size(diffHost));
 }
 
 // ---- tabs ---------------------------------------------------------------------
@@ -254,15 +258,15 @@ function showView() {
     editorHost.hidden = false;
     editor.setModel(tab.model);
     if (tab.viewState) editor.restoreViewState(tab.viewState);
-    editor.layout();
+    layout();
     const lang = tab.model.getLanguageId();
     $("#status-language").textContent = lang === "plaintext" ? "Plain text" : lang;
   } else {
     editorHost.hidden = true;
     diffHost.hidden = false;
     diffEditor.setModel({ original: tab.original, modified: tab.modified });
-    diffEditor.layout();
-    requestAnimationFrame(() => diffEditor.layout());
+    layout();
+    requestAnimationFrame(layout);
     $("#status-language").textContent = "diff";
     $("#status-cursor").textContent = "";
   }

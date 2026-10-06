@@ -28,6 +28,9 @@ export async function refreshGit() {
   if (!v) { render(); updateStatusBar(null); setGitDecorations(null); return; }
   try {
     const status = await api.gitStatus(v.path);
+    // Nested repositories (submodules, agent worktrees) are left out: their
+    // work is committed from inside them, not from here.
+    status.entries = status.entries.filter((e) => !e.submodule);
     v.git = status;
     if (status.is_repo) v.log = await api.gitLog(status.root, 30).catch(() => []);
   } catch (err) {
