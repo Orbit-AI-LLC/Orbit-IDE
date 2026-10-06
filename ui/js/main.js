@@ -28,6 +28,7 @@ async function boot() {
   await refreshProviders().catch(() => {});
   renderProjectList();
   on("projects", renderProjectList);
+  on("open-project", (path) => addProject(path));
   on("settings", () => { renderProjectList(); });
   const last = state.settings.active_project;
   if (last && state.settings.projects.some((p) => p.path === last)) await switchProject(last);
@@ -54,6 +55,7 @@ async function selfTest() {
   log(`git repo=${v.git && v.git.is_repo} branch=${v.git && v.git.branch} entries=${v.git ? v.git.entries.length : -1} staged=${v.git ? v.git.entries.filter((e) => e.staged).length : -1}`);
   const gitRows = $$("#git-panel .git-row");
   log(`git rows rendered=${gitRows.length}`);
+  if (v.git && v.git.entries) log(`git entries ${JSON.stringify(v.git.entries.map((e) => ({ p: e.path, sub: e.submodule, stageable: e.stageable, inner: e.sub_changes, add: e.add, del: e.del })))}`);
   if (gitRows[0]) {
     gitRows[0].click();
     await new Promise((r) => setTimeout(r, 2500));

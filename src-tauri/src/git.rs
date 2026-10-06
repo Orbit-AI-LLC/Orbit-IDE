@@ -53,6 +53,17 @@ pub struct StatusEntry {
     /// change, whether staged or not.
     pub add: u32,
     pub del: u32,
+    /// A submodule (or a nested repository recorded as one).
+    pub submodule: bool,
+    /// The submodule's checked-out commit differs from the recorded one,
+    /// which the outer repository can stage.
+    pub sub_commit_changed: bool,
+    /// Modified or untracked files inside the submodule. They can only be
+    /// committed from inside it.
+    pub sub_dirty: bool,
+    pub sub_changes: u32,
+    /// Whether `git add` in the outer repository can stage anything here.
+    pub stageable: bool,
 }
 
 #[derive(Serialize, Default)]
@@ -73,7 +84,8 @@ pub fn status(repo: &str) -> Result<Status, String> {
         Ok(r) => r.trim().to_string(),
         Err(_) => return Ok(Status { is_repo: false, root: repo.to_string(), ..Status::default() }),
     };
-    let raw = run_bytes(&root, &["status", "--porcelain=v1", "-z", "-b", "--untracked-files=all"])?;
+    // Version 2 says which entries are submodules and how they changed.
+    let raw = run_bytes(&root, &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"])?;
     let mut status = Status { is_repo: true, root: root.clone(), has_commits: run(&root, &["rev-parse", "--verify", "HEAD"]).is_ok(), ..Status::default() };
     let records: Vec<&[u8]> = raw.split(|b| *b == 0).collect();
     let mut i = 0;
@@ -83,38 +95,92 @@ pub fn status(repo: &str) -> Result<Status, String> {
         if rec.is_empty() {
             continue;
         }
-        if let Some(head) = rec.strip_prefix("## ") {
-            parse_branch_line(head, &mut status);
+        if let Some(header) = rec.strip_prefix("# ") {
+            parse_branch_header(header, &mut status);
             continue;
         }
-        if rec.len() < 3 {
-            continue;
-        }
-        let x = rec[0..1].to_string();
-        let y = rec[1..2].to_string();
-        let path = rec[3..].to_string();
-        let mut entry = StatusEntry { path, index: x.clone(), worktree: y.clone(), ..StatusEntry::default() };
-        if x == "R" || x == "C" || y == "R" || y == "C" {
-            if i < records.len() {
-                entry.orig_path = Some(String::from_utf8_lossy(records[i]).to_string());
-                i += 1;
+        let kind = &rec[..1];
+        let (xy, sub, path) = match kind {
+            "1" => {
+                let f: Vec<&str> = rec.splitn(9, ' ').collect();
+                if f.len() < 9 { continue; }
+                (f[1].to_string(), f[2].to_string(), f[8].to_string())
             }
+            "2" => {
+                let f: Vec<&str> = rec.splitn(10, ' ').collect();
+                if f.len() < 10 { continue; }
+                (f[1].to_string(), f[2].to_string(), f[9].to_string())
+            }
+            "u" => {
+                let f: Vec<&str> = rec.splitn(11, ' ').collect();
+                if f.len() < 11 { continue; }
+                (f[1].to_string(), f[2].to_string(), f[10].to_string())
+            }
+            "?" => ("??".to_string(), "N...".to_string(), rec[2..].to_string()),
+            _ => continue, // "!" ignored entries
+        };
+        let dot = |c: char| if c == '.' { " ".to_string() } else { c.to_string() };
+        let mut chars = xy.chars();
+        let x = dot(chars.next().unwrap_or('.'));
+        let y = dot(chars.next().unwrap_or('.'));
+        let mut entry = StatusEntry { path, index: x.clone(), worktree: y.clone(), ..StatusEntry::default() };
+        if kind == "2" && i < records.len() {
+            entry.orig_path = Some(String::from_utf8_lossy(records[i]).to_string());
+            i += 1;
         }
-        if x == "?" && y == "?" {
+        if kind == "?" {
             entry.untracked = true;
             entry.unstaged = true;
-        } else if x == "!" {
-            continue;
         } else {
-            entry.conflicted = x == "U" || y == "U" || (x == "A" && y == "A") || (x == "D" && y == "D");
+            entry.conflicted = kind == "u";
             entry.staged = x != " " && !entry.conflicted;
             entry.unstaged = y != " " || entry.conflicted;
+        }
+        // sub is "N..." for a plain path, or "S" + C (commit changed) M (tracked
+        // changes inside) U (untracked files inside), each "." when not.
+        let sb: Vec<char> = sub.chars().collect();
+        if sb.first() == Some(&'S') {
+            entry.submodule = true;
+            entry.sub_commit_changed = sb.get(1) == Some(&'C');
+            entry.sub_dirty = sb.get(2) == Some(&'M') || sb.get(3) == Some(&'U');
+            // Only a moved pointer (or an add, delete or rename of the
+            // submodule itself) is something the outer repository can stage.
+            entry.stageable = entry.sub_commit_changed || x != " " || matches!(y.as_str(), "D" | "A");
+            if entry.sub_dirty {
+                let inner = std::path::Path::new(&root).join(&entry.path);
+                entry.sub_changes = run_bytes(&inner.to_string_lossy(), &["status", "--porcelain=v1", "-z", "--untracked-files=normal"])
+                    .map(|raw| raw.split(|b| *b == 0).filter(|r| r.len() > 3).count() as u32)
+                    .unwrap_or(0);
+            }
+        } else {
+            entry.stageable = true;
         }
         status.entries.push(entry);
     }
     status.entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
     add_line_counts(&root, &mut status);
     Ok(status)
+}
+
+fn parse_branch_header(header: &str, status: &mut Status) {
+    if let Some(head) = header.strip_prefix("branch.head ") {
+        if head == "(detached)" {
+            status.branch = "HEAD".to_string();
+            status.detached = true;
+        } else {
+            status.branch = head.to_string();
+        }
+    } else if let Some(upstream) = header.strip_prefix("branch.upstream ") {
+        status.upstream = Some(upstream.to_string());
+    } else if let Some(ab) = header.strip_prefix("branch.ab ") {
+        for part in ab.split(' ') {
+            if let Some(n) = part.strip_prefix('+') {
+                status.ahead = n.parse().unwrap_or(0);
+            } else if let Some(n) = part.strip_prefix('-') {
+                status.behind = n.parse().unwrap_or(0);
+            }
+        }
+    }
 }
 
 /// Lines added and removed per file, from `git diff --numstat`, plus the
@@ -205,34 +271,6 @@ fn count_lines(path: &std::path::Path) -> u32 {
     (newlines + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"))) as u32
 }
 
-fn parse_branch_line(head: &str, status: &mut Status) {
-    // "main...origin/main [ahead 1, behind 2]" | "No commits yet on main" | "HEAD (no branch)"
-    let (names, counts) = match head.find(" [") {
-        Some(idx) => (&head[..idx], Some(&head[idx + 2..head.len() - 1])),
-        None => (head, None),
-    };
-    if let Some(b) = names.strip_prefix("No commits yet on ") {
-        status.branch = b.to_string();
-    } else if names.starts_with("HEAD (no branch)") {
-        status.branch = "HEAD".to_string();
-        status.detached = true;
-    } else if let Some((local, upstream)) = names.split_once("...") {
-        status.branch = local.to_string();
-        status.upstream = Some(upstream.to_string());
-    } else {
-        status.branch = names.to_string();
-    }
-    if let Some(counts) = counts {
-        for part in counts.split(", ") {
-            if let Some(n) = part.strip_prefix("ahead ") {
-                status.ahead = n.parse().unwrap_or(0);
-            } else if let Some(n) = part.strip_prefix("behind ") {
-                status.behind = n.parse().unwrap_or(0);
-            }
-        }
-    }
-}
-
 pub fn stage(repo: &str, paths: &[String]) -> Result<(), String> {
     if paths.is_empty() {
         run(repo, &["add", "-A"])?;
@@ -311,7 +349,13 @@ pub fn commit(repo: &str, message: &str, amend: bool) -> Result<String, String> 
     if amend {
         args.push("--amend");
     }
-    run(repo, &args)?;
+    if let Err(err) = run(repo, &args) {
+        // With nothing staged git prints the whole status; say what it means.
+        if err.contains("no changes added to commit") || err.contains("nothing to commit") || err.contains("nothing added to commit") {
+            return Err("Nothing is staged, so there is nothing to commit.".to_string());
+        }
+        return Err(err);
+    }
     run(repo, &["log", "-1", "--format=%h %s"]).map(|s| s.trim().to_string())
 }
 

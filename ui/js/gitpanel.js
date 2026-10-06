@@ -71,6 +71,7 @@ function counter(add, del, cls = "") {
 
 function stagedState(entry) {
   if (entry.conflicted) return "conflict";
+  if (!entry.stageable) return "locked";
   if (entry.staged && !entry.unstaged) return "all";
   if (entry.staged && entry.unstaged) return "part";
   return "none";
@@ -145,7 +146,7 @@ function buildUi(v) {
         if (await confirmDialog("Amend the last commit?", "The selected changes and this message replace the previous commit. Avoid this on a pushed branch.", { ok: "Amend" })) commitWith(u.textarea, { amend: true });
       } },
       { separator: true },
-      { label: "Select all and commit", action: async () => { const s = currentStatus(); if (!s) return; await api.gitStage(s.root, []); await refreshGit(); doCommit(u.textarea, false); } },
+      { label: "Select all and commit", action: async () => { const s = currentStatus(); if (!s) return; const paths = s.entries.filter((e) => e.stageable && !e.conflicted).map((e) => e.path); if (paths.length) await api.gitStage(s.root, paths).catch((err) => toast(formatError(err), "error")); if (ui) ui.listKey = null; await refreshGit(); doCommit(u.textarea, false); } },
     ]);
   });
   u.top = el("div", { class: "git-top" }, [
@@ -166,6 +167,7 @@ function updateUi(v) {
   const u = ui;
   const status = v.git;
   const entries = status.entries;
+  const stageable = entries.filter((e) => e.stageable);
   const selected = entries.filter((e) => e.staged);
   // Branch and sync.
   u.branchBtn.firstChild.textContent = status.branch;
@@ -188,22 +190,23 @@ function updateUi(v) {
   u.moreBtn.disabled = busy;
   // The list, rebuilt only when its content changed.
   const log = v.log || [];
-  const key = JSON.stringify([entries.map((e) => [e.path, e.index, e.worktree, e.staged, e.unstaged, e.add, e.del]), showLog, log.map((c) => c.short), v.gitSelected]);
+  const key = JSON.stringify([entries.map((e) => [e.path, e.index, e.worktree, e.staged, e.unstaged, e.add, e.del, e.sub_changes]), showLog, log.map((c) => c.short), v.gitSelected]);
   if (key === u.listKey) return;
   u.listKey = key;
   u.lists.innerHTML = "";
   if (!entries.length) u.lists.append(el("div", { class: "git-empty", text: "No changes." }));
   else {
-    const totals = entries.reduce((t, e) => { t.add += e.add; t.del += e.del; return t; }, { add: 0, del: 0 });
-    const allState = entries.every((e) => stagedState(e) === "all") ? "all" : entries.some((e) => e.staged) ? "part" : "none";
-    const master = el("input", { type: "checkbox", title: allState === "all" ? "Unselect all" : "Select all" });
+    const totals = stageable.reduce((t, e) => { t.add += e.add; t.del += e.del; return t; }, { add: 0, del: 0 });
+    const allState = stageable.length && stageable.every((e) => stagedState(e) === "all") ? "all" : stageable.some((e) => e.staged) ? "part" : "none";
+    const master = el("input", { type: "checkbox", title: !stageable.length ? "Nothing here can be staged from this repository" : allState === "all" ? "Unselect all" : "Select all" });
     master.checked = allState === "all";
     master.indeterminate = allState === "part";
-    master.addEventListener("change", () => act(() => allState === "all" ? api.gitUnstage(status.root, []) : api.gitStage(status.root, [])));
+    master.disabled = !stageable.length;
+    master.addEventListener("change", () => act(() => allState === "all" ? api.gitUnstage(status.root, []) : api.gitStage(status.root, stageable.map((e) => e.path))));
     u.lists.append(el("div", { class: "git-section-header" }, [
       master,
       el("span", { text: "Changes" }),
-      el("span", { class: "count", text: `${selected.length}/${entries.length}` }),
+      el("span", { class: "count", text: `${selected.length}/${stageable.length}` }),
       counter(totals.add, totals.del),
       el("div", { class: "panel-actions" }, [
         el("button", { class: "icon-btn sm", title: "Discard all changes", text: "↶", onclick: () => discard(status, entries.filter((e) => !e.conflicted)) }),
@@ -230,26 +233,50 @@ function row(status, entry) {
   const letter = entry.untracked ? "U" : entry.conflicted ? "C" : (entry.worktree !== " " ? entry.worktree : entry.index);
   const dir = dirname(entry.path);
   const sel = stagedState(entry);
-  const box = el("input", { type: "checkbox", title: sel === "conflict" ? "Resolve the conflict first" : sel === "all" ? "Unselect (unstage)" : "Select for commit (stage)" });
+  const nestedNote = entry.submodule && entry.sub_dirty
+    ? `${entry.sub_changes || "Uncommitted"} ${entry.sub_changes === 1 ? "change" : "changes"} inside this nested repository. Commit them from inside it: open it as a project.`
+    : "";
+  const box = el("input", { type: "checkbox", title: sel === "conflict" ? "Resolve the conflict first" : sel === "locked" ? nestedNote : sel === "all" ? "Unselect (unstage)" : "Select for commit (stage)" });
   box.checked = sel === "all";
   box.indeterminate = sel === "part";
-  box.disabled = sel === "conflict";
+  box.disabled = sel === "conflict" || sel === "locked";
   box.addEventListener("click", (event) => event.stopPropagation());
   box.addEventListener("change", () => act(() => sel === "all" ? api.gitUnstage(status.root, [entry.path]) : api.gitStage(status.root, [entry.path])));
   const node = el("div", { class: `git-row ${v.gitSelected === entry.path ? "selected" : ""} ${sel === "all" ? "checked" : ""}`, title: entry.path }, [
     box,
     el("span", { class: "name", text: basename(entry.path) }),
     el("span", { class: "dir", text: dir === "/" || dir === "." ? "" : dir }),
-    entry.add || entry.del ? counter(entry.add, entry.del) : null,
-    el("span", { class: "row-actions" }, [
+    entry.submodule
+      ? el("span", { class: "nested-tag", title: nestedNote || "Submodule", text: entry.sub_dirty ? `nested repo · ${entry.sub_changes || "?"}` : "submodule" })
+      : (entry.add || entry.del ? counter(entry.add, entry.del) : null),
+    el("span", { class: "row-actions" }, entry.submodule ? [
+      el("button", { class: "icon-btn sm", title: "Open as project", text: "↗", onclick: (event) => { event.stopPropagation(); emit("open-project", abs); } }),
+    ] : [
       el("button", { class: "icon-btn sm", title: "Open file", text: "↗", onclick: (event) => { event.stopPropagation(); openFile(abs); } }),
       !entry.conflicted ? el("button", { class: "icon-btn sm", title: "Discard changes", text: "↶", onclick: (event) => { event.stopPropagation(); discard(status, [entry]); } }) : null,
     ]),
     el("span", { class: `letter s-${letter}`, text: letter }),
   ]);
-  node.addEventListener("click", () => { v.gitSelected = entry.path; showDiff(status, entry); render(); });
+  node.addEventListener("click", async () => {
+    if (entry.submodule && !entry.stageable) {
+      const ok = await confirmDialog(`${basename(entry.path)} is a nested repository`, `${nestedNote} Its own commits are made there; this repository only records which commit it points at.`, { ok: "Open as project" });
+      if (ok) emit("open-project", abs);
+      return;
+    }
+    v.gitSelected = entry.path; showDiff(status, entry); render();
+  });
   node.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    if (entry.submodule) {
+      contextMenu(event.clientX, event.clientY, [
+        { label: "Open as project", action: () => emit("open-project", abs) },
+        entry.stageable ? (sel === "all" ? { label: "Unselect", action: () => act(() => api.gitUnstage(status.root, [entry.path])) } : { label: "Select for commit", action: () => act(() => api.gitStage(status.root, [entry.path])) }) : null,
+        { separator: true },
+        { label: "Reveal in Finder", action: () => api.reveal(abs) },
+        { label: "Copy path", action: () => navigator.clipboard.writeText(abs) },
+      ]);
+      return;
+    }
     contextMenu(event.clientX, event.clientY, [
       { label: "Open file", action: () => openFile(abs) },
       { label: "Open changes", action: () => showDiff(status, entry) },
@@ -281,10 +308,14 @@ async function showDiff(status, entry) {
 
 async function act(fn) {
   try { await fn(); } catch (err) { toast(formatError(err), "error"); }
-  refreshGit();
+  // Redraw the list from git even if nothing changed: a checkbox click has
+  // already toggled the box, and staging may have done nothing.
+  if (ui) ui.listKey = null;
+  await refreshGit();
 }
 
 async function discard(status, entries) {
+  entries = entries.filter((e) => !e.submodule);
   if (!entries.length) return;
   const names = entries.length === 1 ? basename(entries[0].path) : `${entries.length} files`;
   const ok = await confirmDialog(`Discard changes to ${names}?`, "Working tree changes are thrown away. New files are deleted. This cannot be undone.", { ok: "Discard", danger: true });
@@ -310,15 +341,32 @@ async function sync_(fn, okMessage) {
   await refreshGit();
 }
 
-async function doCommit(textarea, push) {
-  const v = view();
-  const status = v.git;
-  if (!status.entries.some((e) => e.staged)) {
-    if (!status.entries.length) { toast("There are no changes to commit."); return; }
-    const ok = await confirmDialog("No files are selected", "Select all changes and commit them?", { ok: "Select all and commit" });
-    if (!ok) return;
-    await api.gitStage(status.root, []).catch((err) => toast(formatError(err), "error"));
+/// Returns true once something is staged, staging everything stageable
+/// (after asking) when nothing is. Explains when nothing can be staged.
+async function ensureStaged(verb) {
+  const status = view().git;
+  if (status.entries.some((e) => e.staged)) return true;
+  const stageable = status.entries.filter((e) => e.stageable && !e.conflicted);
+  const nested = status.entries.filter((e) => e.submodule && !e.stageable);
+  if (!stageable.length) {
+    if (nested.length) {
+      toast(`Nothing here can be staged. The only ${nested.length === 1 ? "change is" : "changes are"} inside ${nested.length === 1 ? "a nested repository" : "nested repositories"} (${nested.map((e) => e.path).join(", ")}). Open ${nested.length === 1 ? "it" : "them"} as a project to commit there.`, "error");
+    } else {
+      toast(`There are no changes to ${verb}.`);
+    }
+    return false;
   }
+  const ok = await confirmDialog("No files are selected", `Select all ${stageable.length} ${stageable.length === 1 ? "change" : "changes"} and ${verb} ${stageable.length === 1 ? "it" : "them"}?`, { ok: "Select all" });
+  if (!ok) return false;
+  try { await api.gitStage(status.root, stageable.map((e) => e.path)); } catch (err) { toast(formatError(err), "error"); return false; }
+  if (ui) ui.listKey = null;
+  await refreshGit();
+  if (!view().git.entries.some((e) => e.staged)) { toast("Git staged nothing. Check the changes list."); return false; }
+  return true;
+}
+
+async function doCommit(textarea, push) {
+  if (!(await ensureStaged("commit"))) return;
   await commitWith(textarea, { push });
 }
 
@@ -351,13 +399,7 @@ export async function generateMessage(textarea, providerId) {
   if (!status || !status.is_repo || generating) return;
   const p = provider(providerId);
   if (p && !p.available) { toast(`${p.name}: ${p.detail}`, "error"); return; }
-  if (!status.entries.some((e) => e.staged)) {
-    if (!status.entries.length) { toast("There are no changes to describe."); return; }
-    const ok = await confirmDialog("No files are selected", "Select all changes and write a message for them?", { ok: "Select all" });
-    if (!ok) return;
-    try { await api.gitStage(status.root, []); } catch (err) { toast(formatError(err), "error"); return; }
-    await refreshGit();
-  }
+  if (!(await ensureStaged("describe"))) return;
   const current = view().git;
   const selected = current.entries.filter((e) => e.staged);
   const left = current.entries.filter((e) => !e.staged);
