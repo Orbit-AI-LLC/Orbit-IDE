@@ -47,10 +47,13 @@ the git view refreshes itself.
 ## Running from source
 
 ```sh
-npm install            # once: fetches Monaco and xterm
-sh scripts/vendor.sh   # copies them into ui/vendor (run.sh does this if missing)
-sh run.sh              # debug build and launch
+npm install            # fetches Monaco, xterm and the Tauri CLI
+sh run.sh              # vendors the editor libraries if needed, then builds and launches
 ```
+
+`run.sh` and `build_orbit_ide_dmg.sh` re-run `scripts/vendor.sh` whenever
+`ui/vendor` is missing or was made from different inputs, so a `git pull`
+never leaves a stale copy behind.
 
 The page lives in `ui/` with no bundler: plain HTML, CSS and ES modules.
 Tauri embeds `ui/` into the binary at compile time, so rebuild after editing

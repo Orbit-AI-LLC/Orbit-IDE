@@ -24,4 +24,7 @@ cp node_modules/@xterm/xterm/lib/xterm.mjs ui/vendor/xterm/
 cp node_modules/@xterm/xterm/css/xterm.css ui/vendor/xterm/
 cp node_modules/@xterm/addon-fit/lib/addon-fit.mjs ui/vendor/xterm/
 cp node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs ui/vendor/xterm/
+# Record what produced this folder, so run.sh and the build script can tell
+# when it is stale (an older checkout's ui/vendor survives a git pull).
+sh scripts/vendor_stamp.sh > ui/vendor/.stamp
 echo "vendored into ui/vendor"

@@ -17,7 +17,16 @@ export function loadMonaco() {
     // script, which a custom-scheme page cannot do.
     const WORKERS = { json: "json", css: "css", scss: "css", less: "css", html: "html", handlebars: "html", razor: "html", typescript: "ts", javascript: "ts" };
     window.MonacoEnvironment = {
-      getWorker: (_moduleId, label) => new Worker(`vendor/monaco/workers/${WORKERS[label] || "editor"}.worker.js`, { name: label }),
+      getWorker: (_moduleId, label) => {
+        const url = `vendor/monaco/workers/${WORKERS[label] || "editor"}.worker.js`;
+        const worker = new Worker(url, { name: label });
+        worker.addEventListener("error", (event) => {
+          const message = `The editor's ${label} worker failed to load (${url}). Diffs and language features will not work. Rebuild after running scripts/vendor.sh.`;
+          console.error(message, event.message || "");
+          toast(message, "error");
+        });
+        return worker;
+      },
     };
     window.require.config({ paths: { vs: "vendor/monaco/vs" } });
     window.require(["vs/editor/editor.main"], () => resolve(window.monaco), reject);
