@@ -41,6 +41,7 @@ pub fn spawn(app: &AppHandle, state: &PtyState, cwd: &str, program: Option<Strin
     let pair = pty.openpty(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
 
     let shell = crate::shell::user_shell();
+    let agent = program.is_some();
     let mut cmd = if cfg!(windows) {
         match program {
             Some(program) => {
@@ -55,40 +56,42 @@ pub fn spawn(app: &AppHandle, state: &PtyState, cwd: &str, program: Option<Strin
             None => CommandBuilder::new(&shell),
         }
     } else {
-        let mut cmd = CommandBuilder::new(&shell);
         match program {
             Some(program) => {
-                // The login shell sets up the user's environment and runs the agent.
-                // When the agent exits the shell stays open, with the agent's last
-                // output still visible, until the user closes the tab.
-                cmd.arg("-lc");
-                cmd.arg(format!(
-                    "\"$0\" \"$@\"; s=$?; printf '\\n\\033[2m[%s exited with status %s. This shell stays open: run it again, or close the tab.]\\033[0m\\n' \"$0\" \"$s\"; exec '{shell}' -l",
-                    shell = shell.replace('\'', "'\\''")
-                ));
-                cmd.arg(program);
-                for a in args {
-                    cmd.arg(a);
-                }
+                let (sh, argv) = agent_command(&shell, &program, &args);
+                let mut cmd = CommandBuilder::new(sh);
+                cmd.args(argv);
+                cmd
             }
             None => {
+                let mut cmd = CommandBuilder::new(&shell);
                 cmd.arg("-l");
+                cmd
             }
         }
-        cmd
     };
-    cmd.cwd(cwd);
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "OrbitIDE");
-    cmd.env("ORBIT_IDE", "1");
-    cmd.env("PATH", crate::shell::login_path());
+    // The page writes Windows paths with forward slashes.
+    cmd.cwd(crate::fsops::native_path(cwd));
     // An agent started inside another agent's session would run as a nested
     // child: no transcript, no resume. Hand it a clean environment.
     for var in crate::shell::inherited_agent_vars() {
         cmd.env_remove(&var);
     }
-    if std::env::var_os("LANG").is_none() {
+    if agent {
+        // What the login shell exports, as when the agent ran under it. A
+        // plain terminal is the login shell, which reads its profile itself.
+        for (key, value) in crate::shell::login_env() {
+            if !matches!(key.as_str(), "SHLVL" | "PWD" | "OLDPWD" | "_") {
+                cmd.env(key, value);
+            }
+        }
+    }
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM_PROGRAM", "OrbitIDE");
+    cmd.env("ORBIT_IDE", "1");
+    cmd.env("PATH", crate::shell::login_path());
+    if cmd.get_env("LANG").is_none() {
         cmd.env("LANG", "en_US.UTF-8");
     }
 
@@ -127,6 +130,21 @@ pub fn spawn(app: &AppHandle, state: &PtyState, cwd: &str, program: Option<Strin
     Ok(id)
 }
 
+/// The program and arguments that run an agent in a terminal. `/bin/sh` runs
+/// the agent whatever the login shell is: fish, nushell and others don't read
+/// POSIX syntax, and the login shell's environment comes from
+/// `shell::login_env` instead. When the agent exits, its last output stays
+/// visible above a note and the login shell takes over the terminal.
+fn agent_command(shell: &str, program: &str, args: &[String]) -> (String, Vec<String>) {
+    let script = format!(
+        "\"$0\" \"$@\"; s=$?; printf '\\n\\033[2m[%s exited with status %s. This shell stays open: run it again, or close the tab.]\\033[0m\\n' \"$0\" \"$s\"; exec '{shell}' -l",
+        shell = shell.replace('\'', "'\\''")
+    );
+    let mut argv = vec!["-c".to_string(), script, program.to_string()];
+    argv.extend(args.iter().cloned());
+    ("/bin/sh".to_string(), argv)
+}
+
 pub fn write(state: &PtyState, id: u32, data: &str) -> Result<(), String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     let session = sessions.get_mut(&id).ok_or("terminal is closed")?;
@@ -158,3 +176,45 @@ pub fn kill_all(state: &PtyState) {
 }
 
 use tauri::Manager;
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn agents_run_under_sh_whatever_the_login_shell() {
+        for shell in ["/opt/homebrew/bin/fish", "/bin/zsh"] {
+            let args = ["--model".to_string(), "opus".to_string()];
+            let (program, argv) = agent_command(shell, "claude", &args);
+            // Never the login shell: fish would reject `"$0" "$@"; s=$?`.
+            assert_eq!(program, "/bin/sh");
+            assert_eq!(argv[0], "-c");
+            assert!(argv[1].ends_with(&format!("; exec '{shell}' -l")), "{}", argv[1]);
+            assert_eq!(&argv[2..], ["claude", "--model", "opus"]);
+            let parses = Command::new("/bin/sh").args(["-n", "-c", &argv[1]]).status().unwrap();
+            assert!(parses.success(), "the wrapper for {shell} is not POSIX shell");
+        }
+    }
+
+    #[test]
+    fn the_wrapper_runs_the_agent_then_starts_the_login_shell() {
+        // A stand-in login shell in a folder whose name needs quoting.
+        let dir = std::env::temp_dir().join(format!("orbit-ide-pty-it's here-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("fish");
+        std::fs::write(&fake, "#!/bin/sh\necho \"login shell started with $1\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let agent_args = ["-c".to_string(), "printf 'agent got [%s]\\n' \"$1\"; exit 3".to_string(), "agent".to_string(), "a b'c $HOME".to_string()];
+        let (program, argv) = agent_command(&fake.to_string_lossy(), "/bin/sh", &agent_args);
+        let out = Command::new(&program).args(&argv).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("agent got [a b'c $HOME]"), "{text}");
+        assert!(text.contains("[/bin/sh exited with status 3."), "{text}");
+        assert!(text.trim_end().ends_with("login shell started with -l"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

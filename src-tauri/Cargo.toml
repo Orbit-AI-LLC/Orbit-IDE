@@ -19,6 +19,15 @@ ureq = { version = "2", default-features = false, features = ["json", "native-tl
 native-tls = "0.2"
 notify = "8"
 
+# Move to Trash: Finder's own call on the Mac, the Recycle Bin on Windows.
+# Both crates already come with Tauri.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

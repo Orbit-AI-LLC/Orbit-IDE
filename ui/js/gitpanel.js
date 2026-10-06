@@ -3,7 +3,7 @@
 // commit message.
 import { api } from "./api.js";
 import { state, view, saveSettings, emit, on, provider, projectName, commitInstructions } from "./state.js";
-import { $, el, basename, dirname, joinPath, toast, formatError, contextMenu, confirmDialog, promptDialog, debounce } from "./ui.js";
+import { $, el, basename, dirname, joinPath, toast, formatError, contextMenu, confirmDialog, promptDialog } from "./ui.js";
 import { openFile, openDiff, languageFor, saveAll } from "./editor.js";
 import { setGitDecorations } from "./explorer.js";
 
@@ -21,26 +21,68 @@ export function initGit() {
   on("providers", () => render());
 }
 
-export const refreshGitSoon = debounce(() => refreshGit(), 400);
+// Soon, but not never: while an agent writes files without a pause, a plain
+// debounce would put the refresh off for as long as it works.
+let soonTimer = null;
+let soonSince = 0;
+export function refreshGitSoon() {
+  const now = Date.now();
+  if (!soonTimer) soonSince = now;
+  clearTimeout(soonTimer);
+  soonTimer = setTimeout(() => { soonTimer = null; refreshGit(); }, Math.max(0, Math.min(400, soonSince + 1500 - now)));
+}
 
-export async function refreshGit() {
-  const v = view();
-  if (!v) { render(); updateStatusBar(null); setGitDecorations(null); return; }
+/// Reads a project's status (the active one unless given) and draws it if
+/// that project is on screen. The changes draw first; the log follows.
+export async function refreshGit(v = view()) {
+  if (!v) { showGit(); return; }
+  const seq = (v.gitSeq = (v.gitSeq || 0) + 1);
+  let status;
   try {
-    const status = await api.gitStatus(v.path);
+    status = await api.gitStatus(v.path);
     // Nested repositories (submodules, agent worktrees) are left out: their
     // work is committed from inside them, not from here.
     status.entries = status.entries.filter((e) => !e.submodule);
-    v.git = status;
-    if (status.is_repo) v.log = await api.gitLog(status.root, 30).catch(() => []);
   } catch (err) {
-    v.git = { is_repo: false, root: v.path, entries: [], error: formatError(err) };
+    status = { is_repo: false, root: v.path, entries: [], error: formatError(err) };
   }
-  if (v === view()) {
-    render();
-    updateStatusBar(v.git);
-    setGitDecorations(v.git);
-  }
+  // A refresh that started later has the newer picture.
+  if (seq !== v.gitSeq) return;
+  const count = (s) => (s && s.is_repo ? s.entries.length : -1);
+  const changed = count(v.git) !== count(status);
+  v.git = status;
+  if (v === view()) showGit();
+  if (changed) emit("git-status", v.path);
+  if (!status.is_repo) return;
+  const log = await api.gitLog(status.root, 30).catch(() => []);
+  if (seq !== v.gitSeq) return;
+  v.log = log;
+  if (v === view()) render();
+}
+
+/// Draws the active project's last known status: on a project switch that
+/// is the one the background check read, shown before the refresh is back.
+export function showGit() {
+  const v = view();
+  render();
+  updateStatusBar(v ? v.git : null);
+  setGitDecorations(v ? v.git : null);
+}
+
+// Every project in the list is checked in the background, one at a time, so
+// opening one shows its changes at once and the list shows what changed.
+const BACKGROUND_ROUND_MS = 30_000;
+export function startBackgroundGit() {
+  let next = 0;
+  let round = 0;
+  const tick = async () => {
+    const projects = state.settings.projects || [];
+    if (next >= projects.length) { next = 0; round++; }
+    if (projects.length) await refreshGit(view(projects[next++].path)).catch(() => {});
+    // The first round goes quickly, so every project is ready soon after launch.
+    setTimeout(tick, round === 0 ? 200 : BACKGROUND_ROUND_MS / Math.max(1, projects.length));
+  };
+  setTimeout(tick, 1000);
 }
 
 function updateStatusBar(status) {
@@ -338,10 +380,16 @@ async function discard(status, entries) {
   const names = entries.length === 1 ? basename(entries[0].path) : `${entries.length} files`;
   const ok = await confirmDialog(`Discard changes to ${names}?`, "Working tree changes are thrown away. New files are deleted. This cannot be undone.", { ok: "Discard", danger: true });
   if (!ok) return;
-  const tracked = entries.filter((e) => !e.untracked).map((e) => e.path);
-  const untracked = entries.filter((e) => e.untracked).map((e) => e.path);
+  // A staged new file (or a rename's new name) is untracked once unstaged, so
+  // it is deleted; a rename's old name is restored. git checkout refuses the
+  // whole list when one path is unknown to it.
+  const added = (e) => e.untracked || e.index === "A" || e.index === "R" || e.index === "C";
+  const renamedFrom = entries.filter((e) => e.index === "R" && e.orig_path).map((e) => e.orig_path);
+  const staged = entries.filter((e) => !e.untracked).map((e) => e.path).concat(renamedFrom);
+  const tracked = entries.filter((e) => !added(e)).map((e) => e.path).concat(renamedFrom);
+  const untracked = entries.filter(added).map((e) => e.path);
   await act(async () => {
-    if (tracked.length) await api.gitUnstage(status.root, tracked);
+    if (staged.length) await api.gitUnstage(status.root, staged);
     await api.gitDiscard(status.root, tracked, untracked);
   });
   emit("fs-discarded", entries.map((e) => joinPath(status.root, e.path)));

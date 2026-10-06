@@ -21,7 +21,8 @@ export function openSettings(page = "general") {
 
   const bind = (key, input, { number = false, bool = false } = {}) => {
     if (bool) { input.checked = !!s[key]; input.addEventListener("change", () => saveSettings({ [key]: input.checked })); }
-    else { input.value = s[key] ?? ""; input.addEventListener("change", () => saveSettings({ [key]: number ? Number(input.value) || 0 : input.value })); }
+    // Whole numbers only: a 12.5 or -1 would fail this save and every later one.
+    else { input.value = s[key] ?? ""; input.addEventListener("change", () => saveSettings({ [key]: number ? Math.max(0, Math.round(Number(input.value) || 0)) : input.value })); }
     return input;
   };
   const field = (label, input, hint) => el("div", { class: "field" }, [el("label", { text: label }), input, hint ? el("div", { class: "hint", text: hint }) : null]);
@@ -82,7 +83,7 @@ export function openSettings(page = "general") {
   instructions.value = commitInstructions();
   instructions.addEventListener("change", () => saveSettings({ commit_instructions: instructions.value.trim() === (state.defaultCommitInstructions || "").trim() ? "" : instructions.value }));
   pages.commit = el("div", { class: "settings-page" }, [
-    field("Default provider", bind("commit_provider", providerSelect)),
+    field("Default provider", bind("commit_provider", providerSelect), "Claude Code writes messages with Haiku, which is quick. Its model setting under Providers is for the Claude tab."),
     field("Instructions", instructions, "Sent before the branch name, recent commit subjects, the file list and the staged diff."),
     el("div", {}, [el("button", { class: "btn", text: "Reset to default", onclick: () => { instructions.value = state.defaultCommitInstructions || ""; saveSettings({ commit_instructions: "" }); } })]),
   ]);

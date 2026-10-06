@@ -24,7 +24,12 @@ export function initAiPanel() {
   actionsEl = $("#ai-actions");
   listen("ai:delta", ({ id, text }) => onDelta(id, text));
   listen("ai:done", ({ id, error }) => onDone(id, error));
-  on("providers", () => renderTabs());
+  on("providers", () => {
+    // Claude found for the first time opens its agents page; otherwise leave
+    // the body alone, so a check from Settings doesn't pull the focus away.
+    const v = view();
+    if (v && !v.claudeStarted && currentTab() === "claude") renderAll(); else renderTabs();
+  });
   on("project", () => renderAll());
   renderAll();
 }
@@ -44,7 +49,10 @@ export function isAiDockOpen() {
 
 function currentTab() {
   const v = view();
-  return (v && v.aiTab) || state.settings.commit_provider || "claude";
+  if (v && v.aiTab) return v.aiTab;
+  // With Claude Code installed the dock opens on its agents page.
+  const claude = provider("claude");
+  return claude && claude.available ? "claude" : state.settings.commit_provider || "claude";
 }
 
 export function renderAll() {
@@ -81,18 +89,21 @@ function renderBody() {
   const p = PROVIDERS.find((x) => x.id === id);
   if (id === "openrouter") { renderChat(v); return; }
   const term = v.agents[id];
+  // The agents page and an attached session only show background sessions,
+  // which keep running when the terminal goes away.
+  const restart = () => (term && term.fleet ? openClaude(v) : startAgent(p, []));
   if (term) {
     actionsEl.append(
-      el("button", { class: "icon-btn", title: "Restart", text: "↻", onclick: async () => {
-        if (term.exited || await confirmDialog(`Restart ${p.name}?`, "The running session is stopped.", { ok: "Restart" })) startAgent(p, []);
+      el("button", { class: "icon-btn", title: term.fleet ? "Reload" : "Restart", text: "↻", onclick: async () => {
+        if (term.exited || term.fleet || await confirmDialog(`Restart ${p.name}?`, "The running session is stopped.", { ok: "Restart" })) restart();
       } }),
-      el("button", { class: "icon-btn", title: term.exited ? "Close" : "Stop", text: "×", onclick: () => { if (term.exited) closeAgent(v, id); else term.kill(); } }),
+      el("button", { class: "icon-btn", title: term.exited ? "Close" : term.fleet ? "Close. Background sessions keep running." : "Stop", text: "×", onclick: () => { if (term.exited) closeAgent(v, id); else term.kill(); } }),
     );
     if (term.exitBar) { term.exitBar.remove(); term.exitBar = null; }
     if (term.exited) {
       term.exitBar = el("div", { class: "term-exit" }, [
         el("span", { text: `${p.name} session ended${term.exitCode !== undefined && term.exitCode !== null ? ` (exit ${term.exitCode})` : ""}. The output stays until you close it.` }),
-        el("button", { class: "btn", text: "Restart", onclick: () => startAgent(p, []) }),
+        el("button", { class: "btn", text: "Restart", onclick: restart }),
         el("button", { class: "btn", text: "Close", onclick: () => closeAgent(v, id) }),
       ]);
       term.el.append(term.exitBar);
@@ -102,18 +113,27 @@ function renderBody() {
     return;
   }
   const info = provider(id) || { available: false, detail: "" };
+  // Claude opens as soon as the project does, once: closing it leaves the
+  // buttons below.
+  if (id === "claude" && info.available && !v.claudeStarted) { openClaude(v); return; }
+  if (id === "claude" && v.claudeOpening) {
+    bodyEl.append(el("div", { class: "ai-view" }, [el("div", { class: "ai-start" }, [el("p", { text: "Opening Claude…" })])]));
+    return;
+  }
   const cfg = state.settings;
   const model = cfg[`${p.settingsKey}_model`];
   const extra = cfg[`${p.settingsKey}_args`];
+  const agents = id === "claude";
   const start = el("div", { class: "ai-view" }, [el("div", { class: "ai-start" }, [
     el("h3", { text: p.name }),
-    el("p", { text: p.blurb }),
+    el("p", { text: agents ? "Claude Code with all of its tools. The agents page lists every background session; open one to work in it." : p.blurb }),
     info.available
-      ? el("p", {}, [el("code", { text: `cd ${basename(v.path)} && ${p.cli}${model ? ` ${p.modelFlag} ${model}` : ""}${extra ? " " + extra : ""}` })])
+      ? el("p", {}, [el("code", { text: `cd ${basename(v.path)} && ${p.cli}${agents ? " agents" : ""}${model ? ` ${p.modelFlag} ${model}` : ""}${extra ? " " + extra : ""}` })])
       : el("p", { class: "warn", text: info.detail }),
     term && term.exited ? el("p", { text: `The last session ended${term.exitCode !== undefined && term.exitCode !== null ? ` (exit ${term.exitCode})` : ""}.` }) : null,
     el("div", { class: "btn-row" }, [
-      el("button", { class: "btn primary", text: `Start ${p.name}`, disabled: !info.available, onclick: () => startAgent(p, []) }),
+      agents ? el("button", { class: "btn primary", text: "Open agents", disabled: !info.available, onclick: () => openClaude(v, { list: true }) }) : null,
+      el("button", { class: `btn ${agents ? "" : "primary"}`, text: agents ? "New session" : `Start ${p.name}`, disabled: !info.available, onclick: () => startAgent(p, []) }),
       el("button", { class: "btn", text: "Continue last session", disabled: !info.available, onclick: () => startAgent(p, p.continueArgs) }),
       el("button", { class: "btn", text: "Settings", onclick: () => openSettings("providers") }),
     ]),
@@ -130,8 +150,9 @@ function closeAgent(v, id) {
   renderAll();
 }
 
-async function startAgent(p, leadArgs) {
-  const v = view();
+/// `fleet` is the agents page or a session attached from it; `exact` passes
+/// `leadArgs` alone, for `claude attach`, which takes no options.
+async function startAgent(p, leadArgs, v = view(), { fleet = false, exact = false } = {}) {
   if (!v) return;
   const old = v.agents[p.id];
   if (old) { old.dispose(); delete v.agents[p.id]; }
@@ -139,15 +160,74 @@ async function startAgent(p, leadArgs) {
   const model = (cfg[`${p.settingsKey}_model`] || "").trim();
   const extra = (cfg[`${p.settingsKey}_args`] || "").trim();
   const args = [...leadArgs];
-  if (model) args.push(p.modelFlag, model);
-  if (extra) args.push(...extra.split(/\s+/));
+  if (model && !exact) args.push(p.modelFlag, model);
+  if (extra && !exact) args.push(...extra.split(/\s+/));
   const term = new Term({ cwd: v.path, program: p.cli, args, host: bodyEl, onExit: (code) => {
     term.exitCode = code;
     if (view() === v && currentTab() === p.id) renderAll(); else renderTabs();
-  } });
+  }, onTitle: fleet ? (title) => followClaudeTitle(v, term, title) : null });
+  term.fleet = fleet;
   v.agents[p.id] = term;
-  renderAll();
-  try { await term.start(); term.focus(); } catch { /* shown in the terminal */ }
+  if (view() === v) renderAll(); else term.el.hidden = true;
+  try { await term.start(); if (view() === v && currentTab() === p.id) term.focus(); } catch { /* shown in the terminal */ }
+}
+
+// ---- Claude Code agents ------------------------------------------------------
+// The Claude tab opens on `claude agents`, the page of every background
+// session, and the session open in it is remembered per project. The agents
+// page titles the terminal "claude agents" ("2 awaiting input · claude
+// agents"); an open session titles it with its name, after a status glyph
+// while it works ("✳ fix the login redirect"). Next time the project opens,
+// `claude attach` goes straight back to that session, and ← returns to the
+// agents page.
+
+/// Opens the Claude tab: the remembered session if it still exists, else
+/// the agents page (always with `list`).
+async function openClaude(v, { list = false } = {}) {
+  const p = PROVIDERS.find((x) => x.id === "claude");
+  v.claudeStarted = true;
+  v.claudeOpening = true;
+  if (view() === v) renderAll();
+  let args = ["agents"];
+  const remembered = !list && (state.settings.claude_sessions || {})[v.path];
+  if (remembered) {
+    const sessions = await api.aiClaudeSessions().catch(() => null);
+    if (sessions && sessions.some((s) => s.id === remembered)) args = ["attach", remembered];
+    else if (sessions) rememberClaude(v.path, null); // deleted since
+  }
+  v.claudeOpening = false;
+  await startAgent(p, args, v, { fleet: true, exact: args[0] === "attach" });
+}
+
+function rememberClaude(path, id) {
+  const sessions = state.settings.claude_sessions || {};
+  if ((sessions[path] || null) === id) return;
+  const next = { ...sessions };
+  if (id) next[path] = id; else delete next[path];
+  saveSettings({ claude_sessions: next });
+}
+
+async function followClaudeTitle(v, term, title) {
+  if (/^(?:.*· |[^\p{L}\p{N}]*)claude agents$/u.test(title)) { term.claudeName = null; return; }
+  // The glyph turns several times a second while Claude works; only a new
+  // name matters.
+  const name = title.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  if (!name || name === term.claudeName) return;
+  term.claudeName = name;
+  // A session dispatched a moment ago may not be listed yet: look twice.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 2000));
+    const sessions = await api.aiClaudeSessions().catch(() => []);
+    if (term.claudeName !== name) return;
+    const match = pickSession(sessions, name, v.path);
+    if (match) { rememberClaude(v.path, match.id); return; }
+  }
+}
+
+/// The session with this name, preferring one in the project, then the newest.
+function pickSession(sessions, name, path) {
+  const inProject = (s) => (s.cwd === path || s.cwd.startsWith(path + "/") ? 1 : 0);
+  return sessions.filter((s) => s.name === name).sort((a, b) => inProject(b) - inProject(a) || b.started_at - a.started_at)[0] || null;
 }
 
 // ---- OpenRouter chat ----------------------------------------------------------
@@ -160,7 +240,12 @@ function renderChat(v) {
   actionsEl.append(el("button", { class: "icon-btn", title: "Clear conversation", text: "⌫", onclick: () => { chat.messages = []; renderBody(); } }));
   const messages = el("div", { class: "chat-messages" });
   if (!chat.messages.length) messages.append(el("div", { class: "chat-empty", text: info && info.available ? `Ask ${state.settings.openrouter_model} about ${projectName(v.path)}. Attach the open file or a selection for context.` : "Add an OpenRouter API key in Settings to chat." }));
-  for (const m of chat.messages) messages.append(messageNode(m));
+  for (const m of chat.messages) {
+    const node = messageNode(m);
+    messages.append(node);
+    // A reply still streaming keeps growing in the new node, not the old one.
+    for (const s of streams.values()) if (s.message === m) s.node = node;
+  }
   messages.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-act]");
     if (button) {

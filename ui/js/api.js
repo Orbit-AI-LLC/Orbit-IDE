@@ -18,6 +18,7 @@ export const api = {
   defaultCommitInstructions: () => invoke("default_commit_instructions"),
   pickFolder: () => invoke("pick_folder"),
 
+  resolve: (path) => invoke("fs_resolve", { path }),
   list: (path) => invoke("fs_list", { path }),
   read: (path) => invoke("fs_read", { path }),
   write: (path, content) => invoke("fs_write", { path, content }),
@@ -53,6 +54,7 @@ export const api = {
 
   aiProviders: () => invoke("ai_providers"),
   aiComplete: (provider, prompt, cwd, model) => invoke("ai_complete", { provider, prompt, cwd, model: model || null }),
+  aiClaudeSessions: () => invoke("ai_claude_sessions"),
   aiModels: () => invoke("ai_openrouter_models"),
   aiChat: (id, model, messages) => invoke("ai_openrouter_chat", { id, model, messages }),
   aiCancel: (id) => invoke("ai_cancel", { id }),

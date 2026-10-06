@@ -126,6 +126,7 @@ kbd { font: 11px var(--mono); background: var(--bg-raised); border: 1px solid va
 .project-text { min-width: 0; flex: 1; }
 .project-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-path { font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.project-changes { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--bg-raised); color: var(--text-dim); font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center; flex: 0 0 auto; }
 .project-row .icon-btn { opacity: 0; }
 .project-row:hover .icon-btn { opacity: 1; }
 

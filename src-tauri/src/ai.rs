@@ -20,6 +20,8 @@ use crate::settings::Settings;
 
 const OPENROUTER: &str = "https://openrouter.ai/api/v1";
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(240);
+/// The Claude Code model alias for one-shot completions such as commit messages.
+const CLAUDE_COMPLETION_MODEL: &str = "haiku";
 
 #[derive(Serialize)]
 pub struct Provider {
@@ -53,6 +55,32 @@ pub fn providers(settings: &Settings) -> Vec<Provider> {
             detail: if settings.openrouter_api_key.trim().is_empty() { "Add an API key in Settings.".to_string() } else { settings.openrouter_model.clone() },
         },
     ]
+}
+
+/// A Claude Code background session, as `claude agents --json` lists it.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ClaudeSession {
+    /// The short id `claude attach` takes.
+    pub id: String,
+    pub name: String,
+    pub cwd: String,
+    pub state: String,
+    #[serde(rename(deserialize = "startedAt"))]
+    pub started_at: u64,
+}
+
+/// Every background session, running or finished. The Claude tab matches
+/// the session open in it against these to remember it per project.
+pub fn claude_sessions() -> Result<Vec<ClaudeSession>, String> {
+    let mut cmd = crate::shell::command("claude");
+    cmd.args(["agents", "--json", "--all"]);
+    let out = run_with_input(cmd, None)?;
+    let mut sessions: Vec<ClaudeSession> = serde_json::from_str(&out).map_err(|e| format!("claude agents --json: {e}"))?;
+    for session in &mut sessions {
+        session.cwd = crate::fsops::page_path(std::path::Path::new(&session.cwd));
+    }
+    Ok(sessions)
 }
 
 /// Runs `cmd` with `stdin` on its input, kills it after the timeout, and
@@ -105,11 +133,14 @@ pub fn complete(provider: &str, prompt: &str, cwd: &str, model: Option<&str>, se
     let cwd = if std::path::Path::new(cwd).is_dir() { cwd } else { "/" };
     let text = match provider {
         "claude" => {
+            // A one-shot answer needs no tools, MCP servers, skills, thinking
+            // or saved session, and Haiku is fast. The Claude tab keeps its
+            // own model setting.
             let mut cmd = crate::shell::command("claude");
-            cmd.current_dir(cwd).args(["-p", "--output-format", "text"]);
-            if let Some(m) = model.or(Some(settings.claude_model.as_str())).filter(|m| !m.is_empty()) {
-                cmd.args(["--model", m]);
-            }
+            cmd.current_dir(cwd)
+                .args(["-p", "--output-format", "text", "--model", model.unwrap_or(CLAUDE_COMPLETION_MODEL)])
+                .args(["--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"])
+                .env("MAX_THINKING_TOKENS", "0");
             run_with_input(cmd, Some(prompt))?
         }
         "codex" => {

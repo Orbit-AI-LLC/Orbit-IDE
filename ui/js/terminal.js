@@ -17,11 +17,12 @@ function themeFor(theme) {
 }
 
 export class Term {
-  constructor({ cwd, program = null, args = [], host, onExit }) {
+  constructor({ cwd, program = null, args = [], host, onExit, onTitle = null }) {
     this.cwd = cwd;
     this.program = program;
     this.args = args;
     this.onExit = onExit;
+    this.title = "";
     this.id = null;
     this.exited = false;
     this.host = host;
@@ -85,6 +86,7 @@ export class Term {
       else return true;
       return false;
     });
+    this.term.onTitleChange((title) => { this.title = title; if (onTitle) onTitle(title); });
     this.term.onData((data) => { if (this.id !== null && !this.exited) api.ptyWrite(this.id, data).catch(() => {}); });
     this.term.onResize(({ cols, rows }) => { if (this.id !== null && !this.exited) api.ptyResize(this.id, cols, rows).catch(() => {}); });
     this.observer = new ResizeObserver(() => this.fitNow());

@@ -1,11 +1,11 @@
 // Boot: settings, providers, editor, panels, projects, shortcuts.
 import { api, listen, onDragDrop, onDragEnter, onDragLeave } from "./api.js";
 import { state, view, loadSettings, saveSettings, refreshProviders, emit, on, projectName } from "./state.js";
-import { $, $$, el, basename, dirname, relPath, toast, formatError, showModal, isModalOpen, confirmDialog, debounce } from "./ui.js";
-import { initEditor, openFile, saveActive, saveAll, closeTab, switchProjectView, fileChangedOnDisk, fileRemoved, countDirty, layout, focusEditor, applyTheme, closeAllTabs } from "./editor.js";
+import { $, $$, el, basename, dirname, relPath, toast, formatError, showModal, isModalOpen, confirmDialog, choiceDialog, debounce } from "./ui.js";
+import { initEditor, openFile, saveActive, saveAll, closeTab, switchProjectView, fileChangedOnDisk, fileRemoved, countDirty, layout, focusEditor, applyTheme, closeAllTabs, dirtyTabs, saveTabs, openFilePaths, recheckFiles } from "./editor.js";
 import { initTerminals, toggleTerminalPanel, isTerminalPanelOpen, newShell, switchProjectTerminals } from "./terminal.js";
 import { initExplorer, renderTree, refreshTree, invalidate, renderProjects, revealInTree } from "./explorer.js";
-import { initGit, refreshGit, refreshGitSoon } from "./gitpanel.js";
+import { initGit, refreshGit, refreshGitSoon, showGit, startBackgroundGit } from "./gitpanel.js";
 import { initAiPanel, toggleAiDock, isAiDockOpen, renderAll as renderAi } from "./aipanel.js";
 import { openSettings } from "./settings.js";
 
@@ -30,10 +30,12 @@ async function boot() {
   on("projects", renderProjectList);
   on("open-project", (path) => addProject(path));
   on("settings", () => { renderProjectList(); });
+  on("git-status", () => renderProjectList());
   const last = state.settings.active_project;
   if (last && state.settings.projects.some((p) => p.path === last)) await switchProject(last);
   else if (state.settings.projects.length) await switchProject(state.settings.projects[0].path);
   else { showPanel("projects"); }
+  startBackgroundGit();
   window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => { if (state.settings.theme === "system") applyTheme("system"); });
   api.log("info", `booted project=${state.project} providers=${state.providers.map((p) => `${p.id}:${p.available}`).join(",")}`);
   if (state.info && state.info.selftest) selfTest().catch((err) => api.log("selftest", `FAILED ${formatError(err)} ${err && err.stack || ""}`));
@@ -142,6 +144,35 @@ async function selfTest() {
     setTimeout(() => api.ptyKill(agentId), 4500);
   });
   log(`agent shell ${agentResult}`);
+  // Git: one refresh, and the background check of every project.
+  const t0 = performance.now();
+  await refreshGit();
+  log(`git refresh ms=${Math.round(performance.now() - t0)}`);
+  const read = state.settings.projects.filter((p) => { const pv = state.views.get(p.path); return pv && pv.git; }).length;
+  log(`background git read=${read}/${state.settings.projects.length} counts shown=${$$("#projects-list .project-changes").length}`);
+  // Claude opens on its agents page, remembers the session open in it, and
+  // goes back to that session on the next open.
+  const claude = v.agents.claude;
+  log(`claude tab ${claude ? `${claude.program} ${claude.args.join(" ")} fleet=${claude.fleet} title=${JSON.stringify(claude.title)}` : "not started"}`);
+  if (claude && claude.fleet) {
+    const before = { ...(state.settings.claude_sessions || {}) };
+    const sessions = await api.aiClaudeSessions().catch((err) => { log(`claude sessions error=${formatError(err)}`); return []; });
+    const target = sessions.filter((s) => s.state === "done").sort((a, b) => b.started_at - a.started_at)[0];
+    log(`claude sessions=${sessions.length} target=${target ? `${target.id} ${JSON.stringify(target.name)}` : "none"}`);
+    if (target) {
+      claude.write(`\x1b]0;${target.name}\x07`);
+      await new Promise((r) => setTimeout(r, 1500));
+      log(`claude remembered=${(state.settings.claude_sessions || {})[v.path]} expected=${target.id}`);
+      const reload = () => $("#ai-actions .icon-btn").click();
+      reload();
+      await new Promise((r) => setTimeout(r, 2500));
+      log(`claude reopened ${v.agents.claude.args.join(" ")}`);
+      saveSettings({ claude_sessions: before });
+      reload();
+      await new Promise((r) => setTimeout(r, 2500));
+      log(`claude restored ${v.agents.claude.args.join(" ")}`);
+    }
+  }
   log("DONE");
 }
 
@@ -153,10 +184,15 @@ function renderProjectList() {
 
 export async function addProject(path) {
   if (!path) return;
-  path = path.replace(/\/+$/, "");
+  // The project is kept by its resolved path (/tmp/x is /private/tmp/x on the
+  // Mac): the watcher and git report its files under that path. It still
+  // shows by the name of the folder as picked.
+  const resolved = await api.resolve(path).catch(() => null);
+  const name = resolved ? resolved.name : basename(path);
+  path = resolved ? resolved.path : path.replace(/\/+$/, "");
   const projects = state.settings.projects;
   if (!projects.some((p) => p.path === path)) {
-    projects.push({ path, name: basename(path) });
+    projects.push({ path, name });
     saveSettings();
   }
   await switchProject(path);
@@ -170,8 +206,20 @@ async function pickProject() {
 }
 
 async function removeProject(path) {
-  const ok = await confirmDialog(`Remove ${projectName(path)} from the list?`, "The folder stays on disk. Open terminals and agent sessions for it are stopped.", { ok: "Remove" });
-  if (!ok) return;
+  const title = `Remove ${projectName(path)} from the list?`;
+  const text = "The folder stays on disk. Open terminals and agent sessions for it are stopped.";
+  const unsaved = dirtyTabs(path);
+  if (unsaved.length) {
+    const n = unsaved.length;
+    const choice = await choiceDialog(title, `${n} ${n === 1 ? "file has" : "files have"} unsaved changes. ${text}`, [
+      { label: "Cancel", value: null },
+      { label: "Remove without saving", value: "discard", danger: true },
+      { label: "Save and remove", value: "save", primary: true },
+    ]);
+    if (!choice) return;
+    // A file that fails to save keeps the project, and its edits, open.
+    if (choice === "save" && !(await saveTabs(unsaved))) return;
+  } else if (!(await confirmDialog(title, text, { ok: "Remove" }))) return;
   const v = state.views.get(path);
   if (v) {
     for (const shell of v.shells) shell.term.dispose();
@@ -207,9 +255,11 @@ async function afterSwitch() {
   renderProjectList();
   switchProjectView();
   switchProjectTerminals();
-  await renderTree();
-  await refreshGit();
+  // The background check has usually read this project's changes already:
+  // show them now, and refresh them alongside the file tree.
+  showGit();
   renderAi();
+  await Promise.all([renderTree(), refreshGit()]);
   emit("project", v ? v.path : null);
 }
 
@@ -258,8 +308,12 @@ function bindChrome() {
 }
 
 function bindShortcuts() {
+  // Cmd on the Mac, Ctrl elsewhere. On the Mac, Ctrl+W, Ctrl+P, Ctrl+B and
+  // the like belong to the shell and the agents in the terminals. Ctrl+`
+  // toggles the terminal everywhere, as in VS Code.
+  const mac = /^Mac/.test(navigator.platform);
   window.addEventListener("keydown", (event) => {
-    const mod = event.metaKey || event.ctrlKey;
+    const mod = mac ? event.metaKey || (event.ctrlKey && event.key === "`") : event.ctrlKey;
     if (!mod) {
       if (event.key === "Escape" && !isModalOpen()) { /* leave to focused widget */ }
       return;
@@ -325,28 +379,30 @@ function bindDragDrop() {
   onDragLeave(() => { if (hint) { hint.remove(); hint = null; } });
   onDragDrop(async (paths) => {
     if (hint) { hint.remove(); hint = null; }
-    for (const path of paths) {
+    for (const dropped of paths) {
+      // Resolved, with forward slashes on Windows, like every path the page keeps.
+      const item = await api.resolve(dropped).catch(() => ({ path: dropped, is_dir: false }));
       const v = view();
-      if (v && path.startsWith(v.path + "/")) { openFile(path); continue; }
-      try {
-        await api.list(path);
-        await addProject(path);
-      } catch {
-        openFile(path);
-      }
+      if (v && item.path.startsWith(v.path + "/")) { openFile(item.path); continue; }
+      if (item.is_dir) await addProject(dropped); else openFile(item.path);
     }
   });
 }
 
 function bindFsEvents() {
-  listen("fs:changed", async ({ root, paths }) => {
+  listen("fs:changed", async ({ root, paths, overflow }) => {
     const v = view();
     if (!v || root !== v.path) return;
-    invalidate(paths);
-    for (const path of paths) {
-      try { await api.read(path).then(() => fileChangedOnDisk(path)); } catch { fileRemoved(path); }
+    if (overflow) {
+      // More files changed than one message lists (a checkout, a formatter
+      // over the tree): check every open file and read the tree again.
+      await recheckFiles(openFilePaths());
+      await refreshTree();
+    } else {
+      invalidate(paths);
+      await recheckFiles(paths);
+      await renderTree();
     }
-    await renderTree();
     refreshGitSoon();
   });
   listen("git:changed", ({ root }) => {

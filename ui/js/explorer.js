@@ -43,13 +43,17 @@ export function invalidate(paths) {
   for (const p of paths) { cache.delete(p); cache.delete(dirname(p)); }
 }
 
+let renderSeq = 0;
 export async function renderTree() {
   const v = view();
+  const seq = ++renderSeq;
   treeEl.innerHTML = "";
   $("#files-title").textContent = v ? projectName(v.path) : "Explorer";
   if (!v) { treeEl.append(el("div", { class: "panel-hint", text: "Open a project to browse its files." })); return; }
   const frag = document.createDocumentFragment();
   await renderDir(v.path, 0, frag, v);
+  // A render that started while this one listed folders draws the tree.
+  if (seq !== renderSeq) return;
   treeEl.append(frag);
   if (v.activeTab) { const tab = v.tabs.find((t) => t.id === v.activeTab); if (tab && tab.kind === "file") highlightOpen(tab.path); }
 }
@@ -173,7 +177,8 @@ async function renameItem(path) {
     await api.rename(path, to);
     invalidate([path, to]);
     const v = view();
-    for (const tab of v.tabs) if (tab.kind === "file" && tab.path === path) { tab.path = to; tab.title = basename(to); }
+    // Tabs inside a renamed folder move with it.
+    for (const tab of v.tabs) if (tab.kind === "file" && (tab.path === path || tab.path.startsWith(path + "/"))) { tab.path = to + tab.path.slice(path.length); tab.title = basename(tab.path); }
     await renderTree();
     emit("fs-renamed", { from: path, to });
   } catch (err) { toast(formatError(err), "error"); }
@@ -244,9 +249,13 @@ export function renderProjects(onSwitch, onRemove) {
   const projects = state.settings.projects || [];
   $("#projects-empty").hidden = projects.length > 0;
   for (const project of projects) {
+    // Changed files, from the background git check.
+    const v = state.views.get(project.path);
+    const changes = v && v.git && v.git.is_repo ? v.git.entries.length : 0;
     const row = el("div", { class: `project-row ${project.path === state.project ? "active" : ""}`, title: project.path, onclick: () => onSwitch(project.path) }, [
       el("div", { class: "project-icon", text: initials(project.name || basename(project.path)) }),
       el("div", { class: "project-text" }, [el("div", { class: "project-name", text: project.name || basename(project.path) }), el("div", { class: "project-path", text: project.path })]),
+      changes ? el("span", { class: "project-changes", text: changes > 99 ? "99+" : String(changes), title: `${changes} changed ${changes === 1 ? "file" : "files"}` }) : null,
       el("button", { class: "icon-btn sm", text: "×", title: "Remove from list", onclick: (event) => { event.stopPropagation(); onRemove(project.path); } }),
     ]);
     row.addEventListener("contextmenu", (event) => {

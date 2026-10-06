@@ -42,7 +42,7 @@ struct AppInfo {
 fn app_info(app: AppHandle) -> AppInfo {
     AppInfo {
         version: app.package_info().version.to_string(),
-        home: std::env::var("HOME").unwrap_or_default(),
+        home: fsops::page_path(std::path::Path::new(&std::env::var("HOME").unwrap_or_default())),
         shell: shell::user_shell(),
         path: shell::login_path().to_string(),
         selftest: std::env::var_os("ORBIT_IDE_SELFTEST").is_some(),
@@ -57,8 +57,17 @@ fn ui_log(level: String, message: String) {
 }
 
 #[tauri::command]
-fn settings_load(app: AppHandle) -> Settings {
-    settings::load(&app)
+async fn settings_load(app: AppHandle) -> Res<Settings> {
+    blocking(move || {
+        let mut settings = settings::load(&app);
+        // Projects saved before their paths were resolved, or with Windows
+        // backslashes. Resolving touches each folder, so off the main thread.
+        if settings::migrate_paths(&mut settings, |path| fsops::resolve(path).path) {
+            let _ = settings::save(&app, &settings);
+        }
+        Ok(settings)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -77,10 +86,17 @@ async fn pick_folder(app: AppHandle) -> Res<Option<String>> {
     app.dialog().file().set_title("Open a project folder").pick_folder(move |picked| {
         let _ = tx.send(picked);
     });
-    blocking(move || rx.recv().map_err(|e| e.to_string())).await.map(|picked| picked.and_then(|p| p.into_path().ok()).map(|p| p.to_string_lossy().to_string()))
+    blocking(move || rx.recv().map_err(|e| e.to_string())).await.map(|picked| picked.and_then(|p| p.into_path().ok()).map(|p| fsops::page_path(&p)))
 }
 
 // ---- files ---------------------------------------------------------------
+
+/// A folder or file as the page should know it: symlinks resolved, so the
+/// path matches what the watcher and git report.
+#[tauri::command]
+async fn fs_resolve(path: String) -> Res<fsops::Resolved> {
+    blocking(move || Ok(fsops::resolve(&path))).await
+}
 
 #[tauri::command]
 async fn fs_list(path: String) -> Res<Vec<fsops::Entry>> {
@@ -252,6 +268,11 @@ async fn ai_complete(app: AppHandle, provider: String, prompt: String, cwd: Stri
 }
 
 #[tauri::command]
+async fn ai_claude_sessions() -> Res<Vec<ai::ClaudeSession>> {
+    blocking(ai::claude_sessions).await
+}
+
+#[tauri::command]
 async fn ai_openrouter_models(app: AppHandle) -> Res<Vec<ai::ModelInfo>> {
     blocking(move || ai::openrouter_models(&settings::load(&app))).await
 }
@@ -322,6 +343,7 @@ fn main() {
             settings_save,
             default_commit_instructions,
             pick_folder,
+            fs_resolve,
             fs_list,
             fs_read,
             fs_write,
@@ -354,6 +376,7 @@ fn main() {
             pty_kill,
             ai_providers,
             ai_complete,
+            ai_claude_sessions,
             ai_openrouter_models,
             ai_openrouter_chat,
             ai_cancel,

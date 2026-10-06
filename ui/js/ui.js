@@ -129,6 +129,18 @@ export function confirmDialog(title, text, { ok = "OK", danger = false, cancel =
   return m.promise.then((v) => v === true);
 }
 
+/// A question with more than two answers. Each choice is { label, value,
+/// primary, danger }. Resolves to the chosen value; Escape, the close button
+/// and a click outside give null.
+export function choiceDialog(title, text, choices) {
+  let m;
+  const buttons = choices.map((c) => el("button", { class: `btn ${c.danger ? "danger" : c.primary ? "primary" : ""}`, text: c.label, onclick: () => m.close(c.value) }));
+  m = showModal({ title, body: el("p", { text }), footer: buttons });
+  const focus = buttons[choices.findIndex((c) => c.primary)] || buttons[buttons.length - 1];
+  setTimeout(() => focus && focus.focus(), 0);
+  return m.promise.then((v) => (v === undefined ? null : v));
+}
+
 export function promptDialog(title, { label = "", value = "", placeholder = "", ok = "OK", hint = "" } = {}) {
   let m;
   const input = el("input", { type: "text", value, placeholder, spellcheck: "false", autocomplete: "off" });

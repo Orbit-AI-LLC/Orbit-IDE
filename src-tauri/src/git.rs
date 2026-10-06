@@ -84,9 +84,20 @@ pub fn status(repo: &str) -> Result<Status, String> {
         Ok(r) => r.trim().to_string(),
         Err(_) => return Ok(Status { is_repo: false, root: repo.to_string(), ..Status::default() }),
     };
-    // Version 2 says which entries are submodules and how they changed.
-    let raw = run_bytes(&root, &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"])?;
-    let mut status = Status { is_repo: true, root: root.clone(), has_commits: run(&root, &["rev-parse", "--verify", "HEAD"]).is_ok(), ..Status::default() };
+    // The status, the HEAD check and the line counts don't depend on each
+    // other: run them at once, so a refresh takes about one git call, not six.
+    let (raw, has_commits, counts) = std::thread::scope(|s| {
+        let has_commits = s.spawn(|| run(&root, &["rev-parse", "--verify", "HEAD"]).is_ok());
+        let counts = s.spawn(|| LineCounts::read(&root));
+        // Version 2 says which entries are submodules and how they changed.
+        let raw = run_bytes(&root, &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"]);
+        (raw, has_commits.join().unwrap_or(false), counts.join().unwrap_or_default())
+    });
+    let raw = raw?;
+    // The page joins entry paths to the root and matches them against the
+    // file tree, so the root takes the form project paths have: resolved,
+    // and with forward slashes on Windows.
+    let mut status = Status { is_repo: true, root: crate::fsops::resolve(&root).path, has_commits, ..Status::default() };
     let records: Vec<&[u8]> = raw.split(|b| *b == 0).collect();
     let mut i = 0;
     while i < records.len() {
@@ -169,7 +180,7 @@ pub fn status(repo: &str) -> Result<Status, String> {
         status.entries.push(entry);
     }
     status.entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
-    add_line_counts(&root, &mut status);
+    add_line_counts(&root, &mut status, &counts);
     Ok(status)
 }
 
@@ -194,12 +205,30 @@ fn parse_branch_header(header: &str, status: &mut Status) {
     }
 }
 
+/// Lines added and removed per file: staged, unstaged, and against HEAD
+/// (none before the first commit).
+#[derive(Default)]
+struct LineCounts {
+    staged: std::collections::HashMap<String, (u32, u32)>,
+    work: std::collections::HashMap<String, (u32, u32)>,
+    head: Option<std::collections::HashMap<String, (u32, u32)>>,
+}
+
+impl LineCounts {
+    fn read(root: &str) -> LineCounts {
+        std::thread::scope(|s| {
+            let staged = s.spawn(|| numstat(root, true));
+            let work = s.spawn(|| numstat(root, false));
+            let head = numstat_head(root);
+            LineCounts { staged: staged.join().unwrap_or_default(), work: work.join().unwrap_or_default(), head }
+        })
+    }
+}
+
 /// Lines added and removed per file, from `git diff --numstat`, plus the
 /// line count of each untracked text file.
-fn add_line_counts(root: &str, status: &mut Status) {
-    let staged = numstat(root, true);
-    let work = numstat(root, false);
-    let head = numstat_head(root);
+fn add_line_counts(root: &str, status: &mut Status, counts: &LineCounts) {
+    let LineCounts { staged, work, head } = counts;
     for entry in status.entries.iter_mut() {
         match head.as_ref().and_then(|h| h.get(&entry.path)) {
             Some((a, d)) => {
@@ -356,7 +385,9 @@ pub fn commit(repo: &str, message: &str, amend: bool) -> Result<String, String> 
     if message.trim().is_empty() {
         return Err("The commit message is empty.".to_string());
     }
-    let mut args = vec!["commit", "-q", "--cleanup=strip", "-m", message];
+    // Whitespace only: "strip" would drop lines that start with "#", such as
+    // a subject like "#42 Fix the login redirect".
+    let mut args = vec!["commit", "-q", "--cleanup=whitespace", "-m", message];
     if amend {
         args.push("--amend");
     }
@@ -403,8 +434,10 @@ pub struct Branches {
 
 pub fn branches(repo: &str) -> Result<Branches, String> {
     let current = run(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
-    let local = run(repo, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"])?.lines().map(|s| s.to_string()).collect();
-    let remote = run(repo, &["for-each-ref", "--format=%(refname:short)", "refs/remotes/"])?.lines().filter(|s| !s.ends_with("/HEAD")).map(|s| s.to_string()).collect();
+    // lstrip=2, not short: short names refs/remotes/origin/HEAD "origin" and a
+    // branch that shares a tag's name "heads/<name>"; both check out detached.
+    let local = run(repo, &["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"])?.lines().map(|s| s.to_string()).collect();
+    let remote = run(repo, &["for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes/"])?.lines().filter(|s| !s.ends_with("/HEAD")).map(|s| s.to_string()).collect();
     Ok(Branches { current, local, remote })
 }
 
@@ -443,4 +476,34 @@ pub fn fetch(repo: &str) -> Result<String, String> {
 
 pub fn init(path: &str) -> Result<(), String> {
     run(path, &["init", "-q"]).map(|_| ())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_repo_opened_through_a_symlink_reports_the_project_path() {
+        let dir = std::env::temp_dir().join(format!("orbit-ide-git-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real/src")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+        let link = dir.join("link").to_string_lossy().to_string();
+        init(&link).unwrap();
+        std::fs::write(dir.join("real/src/a.rs"), "fn main() {}\n").unwrap();
+
+        // git names the resolved folder, so a project kept as the link path
+        // never matched the files git lists.
+        let toplevel = run(&link, &["rev-parse", "--show-toplevel"]).unwrap().trim().to_string();
+        assert_ne!(toplevel, link);
+
+        // The project is added by its resolved path; git's root is the same
+        // string, so a changed file joins to the path the explorer shows.
+        let project = crate::fsops::resolve(&link).path;
+        let status = status(&project).unwrap();
+        assert_eq!(status.root, project);
+        let entry = status.entries.iter().find(|e| e.path == "src/a.rs").expect("src/a.rs listed");
+        assert_eq!(format!("{}/{}", status.root, entry.path), crate::fsops::resolve(&format!("{link}/src/a.rs")).path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

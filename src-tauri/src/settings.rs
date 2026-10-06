@@ -1,6 +1,7 @@
 //! Settings live in one JSON file in the app's data folder, owner-readable
 //! only because the OpenRouter key is in it.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -54,6 +55,9 @@ pub struct Settings {
     pub grok_args: String,
     pub commit_provider: String,
     pub commit_instructions: String,
+    /// The Claude Code background session each project was last in, by
+    /// project path. The value is the short id `claude attach` takes.
+    pub claude_sessions: BTreeMap<String, String>,
     pub font_size: u32,
     pub tab_size: u32,
     pub word_wrap: bool,
@@ -79,6 +83,7 @@ impl Default for Settings {
             commit_provider: "claude".to_string(),
             // Empty means the default above, so improvements to it reach existing installs.
             commit_instructions: String::new(),
+            claude_sessions: BTreeMap::new(),
             font_size: 13,
             tab_size: 4,
             word_wrap: false,
@@ -104,6 +109,43 @@ pub fn load(app: &AppHandle) -> Settings {
     }
 }
 
+/// Puts every stored project path in the form the page uses now: resolved
+/// (a project added as /tmp/x is /private/tmp/x, the path the watcher and
+/// git report its files under) and, on Windows, with forward slashes. Two
+/// entries that turn out to be one folder become one. True when anything
+/// changed.
+pub fn migrate_paths(settings: &mut Settings, resolve: impl Fn(&str) -> String) -> bool {
+    let mut changed = false;
+    let mut seen = std::collections::HashSet::new();
+    let projects = std::mem::take(&mut settings.projects);
+    let count = projects.len();
+    for mut project in projects {
+        let path = resolve(&project.path);
+        changed |= path != project.path;
+        project.path = path;
+        if seen.insert(project.path.clone()) {
+            settings.projects.push(project);
+        }
+    }
+    changed |= settings.projects.len() != count;
+    if let Some(active) = settings.active_project.take() {
+        let path = resolve(&active);
+        changed |= path != active;
+        settings.active_project = Some(path);
+    }
+    let mut sessions = BTreeMap::new();
+    for (path, id) in std::mem::take(&mut settings.claude_sessions) {
+        let key = resolve(&path);
+        changed |= key != path;
+        // An entry already under the resolved path wins.
+        if key == path || !sessions.contains_key(&key) {
+            sessions.insert(key, id);
+        }
+    }
+    settings.claude_sessions = sessions;
+    changed
+}
+
 pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let path = file(app)?;
     let json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
@@ -115,4 +157,50 @@ pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
         let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
     }
     fs::rename(&tmp, &path).map_err(|e| format!("cannot write settings: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(path: &str, name: &str) -> Project {
+        Project { path: path.to_string(), name: name.to_string() }
+    }
+
+    #[test]
+    fn saved_project_paths_move_to_the_resolved_path() {
+        let resolve = |p: &str| if p.starts_with("/tmp/") { format!("/private{p}") } else { p.replace('\\', "/") };
+        let mut s = Settings {
+            projects: vec![project("/tmp/x", "x"), project("/Users/me/app", "My app"), project("/private/tmp/x", "x again"), project(r"C:\work\site", "site")],
+            active_project: Some("/tmp/x".to_string()),
+            ..Settings::default()
+        };
+        s.claude_sessions.insert("/tmp/x".to_string(), "old".to_string());
+        s.claude_sessions.insert("/private/tmp/x".to_string(), "current".to_string());
+        s.claude_sessions.insert("/Users/me/app".to_string(), "app".to_string());
+        assert!(migrate_paths(&mut s, resolve));
+        let paths: Vec<(&str, &str)> = s.projects.iter().map(|p| (p.path.as_str(), p.name.as_str())).collect();
+        assert_eq!(paths, vec![("/private/tmp/x", "x"), ("/Users/me/app", "My app"), ("C:/work/site", "site")]);
+        assert_eq!(s.active_project.as_deref(), Some("/private/tmp/x"));
+        assert_eq!(s.claude_sessions.get("/private/tmp/x").map(String::as_str), Some("current"));
+        assert_eq!(s.claude_sessions.len(), 2);
+        // A second load finds nothing to do.
+        assert!(!migrate_paths(&mut s, resolve));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_symlinked_project_resolves_on_load() {
+        let dir = std::env::temp_dir().join(format!("orbit-ide-settings-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+        let link = dir.join("link").to_string_lossy().to_string();
+        let mut s = Settings { projects: vec![project(&link, "link")], active_project: Some(link.clone()), ..Settings::default() };
+        assert!(migrate_paths(&mut s, |p| crate::fsops::resolve(p).path));
+        let real = fs::canonicalize(dir.join("real")).unwrap().to_string_lossy().to_string();
+        assert_eq!(s.projects[0].path, real);
+        assert_eq!(s.projects[0].name, "link");
+        assert_eq!(s.active_project.as_deref(), Some(real.as_str()));
+    }
 }

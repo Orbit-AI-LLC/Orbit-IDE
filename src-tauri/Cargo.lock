@@ -2308,6 +2308,8 @@ dependencies = [
  "base64 0.22.1",
  "native-tls",
  "notify",
+ "objc2",
+ "objc2-foundation",
  "portable-pty",
  "serde",
  "serde_json",
@@ -2315,6 +2317,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

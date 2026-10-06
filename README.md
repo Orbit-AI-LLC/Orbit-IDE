@@ -12,15 +12,24 @@ Nothing leaves the Mac except what you send to the provider you choose.
 * **Projects** (first sidebar tab): a list of folders. Switching a project
   swaps the explorer, git view, terminals and agent sessions in the same
   window. Open one with the `+` button, `Cmd+O`, or drop a folder on the
-  window.
+  window. Every project in the list is checked for git changes in the
+  background, so a switch shows its changes at once, and the list shows how
+  many files changed in each. A project is kept by its real path, with
+  symlinks resolved (a folder opened as `/tmp/x` is `/private/tmp/x`), and
+  shows by the name of the folder you picked. Removing a project with unsaved
+  files asks first: save them, throw them away, or cancel.
 * **Explorer** (second tab): the file tree with git status colours, create,
   rename, trash, reveal in Finder. `Cmd+P` jumps to any file; `Cmd+Shift+F`
-  searches text across the project.
+  searches text across the project. Move to Trash uses the system Trash, on
+  another disk that disk's own Trash, so Put Back works. When an item can't
+  go to the Trash, it stays where it is and you get an error; Orbit IDE never
+  deletes it outright.
 * **Source control** (third tab): branch switch and create, fetch, pull and
   push, staged and unstaged lists with added and removed line counts, diffs
   side by side, discard, commit, commit and push, amend. The **Generate**
   button writes the commit message from the staged diff with the provider you
-  pick (Claude, Codex, Grok or OpenRouter). The instructions it follows are in
+  pick (Claude, Codex, Grok or OpenRouter). Claude writes it with Haiku and no
+  thinking, so it takes a few seconds. The instructions it follows are in
   Settings, under Commit messages.
 * **Editor**: Monaco (the engine inside VS Code), bundled, with themes for
   dark and light.
@@ -29,20 +38,32 @@ Nothing leaves the Mac except what you send to the provider you choose.
   * Claude, Codex and Grok each run in a terminal in the project folder,
     exactly as from Terminal.app. Start fresh or continue the last session.
     A model and extra command-line arguments can be set per provider.
+  * With Claude Code installed, the dock opens on the Claude tab and its
+    agents page (`claude agents`), which lists every background session.
+    The session you open there is remembered for the project: next time the
+    project opens, Orbit IDE goes straight back to it (`claude attach`), and
+    ← returns to the agents page.
   * OpenRouter is a streaming chat. The open file or selection can be
     attached as context, and code blocks can be copied or inserted at the
     cursor.
 
 Files edited by an agent reload in the editor as they change on disk, and
-the git view refreshes itself.
+the git view refreshes itself. Changes inside build output and dependency
+folders (`node_modules`, `target`, `dist`, `build`, `.next`, `__pycache__`,
+`.venv`) don't count, so a build can't crowd out an edit. When more than 500
+files change at once, every open file is checked again and the tree is read
+again.
 
 ## Requirements
 
 * macOS 13 or later.
 * `git` (comes with the Xcode command-line tools).
 * The agents you want: `claude`, `codex` and `grok` on your PATH and signed
-  in. Orbit IDE reads the PATH from your login shell, so anything that works
-  in Terminal works here. OpenRouter needs an API key, entered in Settings.
+  in. Orbit IDE reads the PATH and environment from your login shell once,
+  so anything that works in Terminal works here, with any shell (zsh, bash,
+  fish and others). Agents start through `/bin/sh` with that environment,
+  and the login shell takes over the tab when they exit. OpenRouter needs an
+  API key, entered in Settings.
 
 ## Running from source
 
@@ -106,4 +127,8 @@ The Mac build is ad-hoc signed and not notarized; the Windows build is
 unsigned. Add signing secrets to the workflow for signed builds.
 
 On Windows the agents run through `cmd.exe` so the npm-installed `claude`,
-`codex` and `grok` launchers resolve, and the terminal is PowerShell.
+`codex` and `grok` launchers resolve, and the terminal is PowerShell. The
+native side hands the page every path with forward slashes, which Windows
+accepts back, so the page's path handling is the same on both systems. Move
+to Trash uses the Recycle Bin; where a drive has none, Windows asks before it
+deletes anything.

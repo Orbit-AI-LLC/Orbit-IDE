@@ -180,11 +180,15 @@ export async function openFile(path, { line, column, preview = false } = {}) {
       toast(`${basename(path)} is a binary file.`);
       return null;
     }
-    const uri = monaco.Uri.file(path);
-    let model = monaco.editor.getModel(uri);
-    if (!model) model = monaco.editor.createModel(file.content, undefined, uri);
-    else model.setValue(file.content);
-    tab = { id: nextTabId++, kind: "file", path, title: basename(path), model, viewState: null, savedVersion: model.getAlternativeVersionId(), dirty: false, external: false };
+    // A second open of the path (a double click) may have made the tab while
+    // this one was reading.
+    if (v.tabs.some((t) => t.kind === "file" && t.path === path)) return openFile(path, { line, column, preview });
+    // A model already at this path belongs to another tab: the file open in a
+    // nested project, or a tab renamed away from this path. Never take it over.
+    let uri = monaco.Uri.file(path);
+    if (monaco.editor.getModel(uri)) uri = uri.with({ fragment: String(nextTabId) });
+    const model = monaco.editor.createModel(file.content, undefined, uri);
+    tab = { id: nextTabId++, kind: "file", path, title: basename(path), model, viewState: null, savedVersion: model.getAlternativeVersionId(), dirty: false, external: false, disk: textHash(file.content) };
     model.onDidChangeContent(() => {
       const dirty = model.getAlternativeVersionId() !== tab.savedVersion;
       if (dirty !== tab.dirty) { tab.dirty = dirty; renderTabs(); emit("dirty", countDirty()); }
@@ -341,6 +345,19 @@ export async function closeAllTabs(projectPath) {
   v.tabs = [];
   v.activeTab = null;
   if (projectPath === state.project) { showView(); renderTabs(); }
+  emit("dirty", countDirty());
+}
+
+/// The file tabs of a project with unsaved changes.
+export function dirtyTabs(projectPath) {
+  const v = state.views.get(projectPath);
+  return v ? v.tabs.filter((t) => t.kind === "file" && t.dirty) : [];
+}
+
+/// Saves the tabs one by one; false as soon as one fails (it says why).
+export async function saveTabs(list) {
+  for (const tab of list) if (!(await saveTab(tab))) return false;
+  return true;
 }
 
 export async function saveActive() {
@@ -350,10 +367,14 @@ export async function saveActive() {
 }
 
 export async function saveTab(tab) {
+  // Keys typed while the write is in flight are not on disk yet.
+  const version = tab.model.getAlternativeVersionId();
+  const text = tab.model.getValue();
   try {
-    await api.write(tab.path, tab.model.getValue());
-    tab.savedVersion = tab.model.getAlternativeVersionId();
-    tab.dirty = false;
+    await api.write(tab.path, text);
+    tab.savedVersion = version;
+    tab.disk = textHash(text);
+    tab.dirty = tab.model.getAlternativeVersionId() !== version;
     tab.external = false;
     renderTabs();
     emit("dirty", countDirty());
@@ -381,7 +402,12 @@ export async function fileChangedOnDisk(path) {
     let file;
     try { file = await api.read(path); } catch { continue; }
     if (file.binary) continue;
-    if (file.content === tab.model.getValue()) { tab.external = false; continue; }
+    const disk = textHash(file.content);
+    if (file.content === tab.model.getValue()) { tab.external = false; tab.disk = disk; continue; }
+    // Unsaved edits over a file that has not changed since it was read or
+    // saved: nothing to report (a recheck of every tab asks about all of them).
+    if (tab.dirty && tab.disk === disk) continue;
+    tab.disk = disk;
     if (!tab.dirty) {
       const isActive = v === view() && v.activeTab === tab.id;
       const viewState = isActive ? editor.saveViewState() : tab.viewState;
@@ -394,6 +420,34 @@ export async function fileChangedOnDisk(path) {
     }
   }
   renderTabs();
+}
+
+/// Every file open in a tab, in any project.
+export function openFilePaths() {
+  const out = [];
+  for (const [, v] of state.views) for (const tab of v.tabs) if (tab.kind === "file") out.push(tab.path);
+  return out;
+}
+
+/// Reloads open files that changed on disk and closes the ones that are
+/// gone. Paths no tab shows are skipped: a batch can name hundreds of files.
+export async function recheckFiles(paths) {
+  const open = openFilePaths();
+  for (const path of new Set(paths)) {
+    if (!open.some((p) => p === path || p.startsWith(path + "/"))) continue;
+    try { await api.read(path).then(() => fileChangedOnDisk(path)); } catch {
+      // A folder does not read as a file, but it is still there.
+      if (!(await api.list(path).then(() => true, () => false))) fileRemoved(path);
+    }
+  }
+}
+
+/// A short fingerprint of a file's text (FNV-1a), to tell whether the copy on
+/// disk changed without keeping a second copy of every open file.
+function textHash(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16) + ":" + text.length;
 }
 
 export function fileRemoved(path) {
