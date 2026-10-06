@@ -131,6 +131,17 @@ pub fn status(repo: &str) -> Result<Status, String> {
         if kind == "?" {
             entry.untracked = true;
             entry.unstaged = true;
+            // With --untracked-files=all git lists files, except a folder that
+            // is its own repository (an agent worktree, a clone), which it
+            // lists once with a trailing slash. Treat that as nested.
+            if entry.path.ends_with('/') {
+                entry.path = entry.path.trim_end_matches('/').to_string();
+                let inner = std::path::Path::new(&root).join(&entry.path);
+                if inner.join(".git").exists() {
+                    entry.submodule = true;
+                    entry.sub_dirty = true;
+                }
+            }
         } else {
             entry.conflicted = kind == "u";
             entry.staged = x != " " && !entry.conflicted;
@@ -153,7 +164,7 @@ pub fn status(repo: &str) -> Result<Status, String> {
                     .unwrap_or(0);
             }
         } else {
-            entry.stageable = true;
+            entry.stageable = !entry.submodule;
         }
         status.entries.push(entry);
     }
