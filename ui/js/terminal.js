@@ -41,15 +41,49 @@ export class Term {
     this.term.loadAddon(this.fit);
     this.term.loadAddon(new WebLinksAddon((event, uri) => api.openExternal(uri).catch(() => {})));
     this.term.open(this.el);
-    // Claude Code and friends read Shift+Enter as ESC CR (what iTerm2 and the
-    // VS Code binding send). Plain xterm would send a bare CR.
-    this.term.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown") return true;
-      if (event.key === "Enter" && event.shiftKey && !event.metaKey && !event.ctrlKey) {
-        if (this.id !== null && !this.exited) api.ptyWrite(this.id, "\x1b\r").catch(() => {});
-        return false;
-      }
+    // Keyboard protocols. Claude Code asks whether the terminal speaks the
+    // kitty keyboard protocol (CSI ? u) and turns it on (CSI > flags u) to
+    // tell Shift+Enter from Enter everywhere, lists included. Answer that,
+    // keep the flag stack, and accept xterm's modifyOtherKeys too.
+    this.kittyStack = [];
+    this.modifyOtherKeys = 0;
+    const kittyFlags = () => (this.kittyStack.length ? this.kittyStack[this.kittyStack.length - 1] : 0);
+    const reply = (text) => { if (this.id !== null && !this.exited) api.ptyWrite(this.id, text).catch(() => {}); };
+    const parser = this.term.parser;
+    parser.registerCsiHandler({ prefix: "?", final: "u" }, () => { reply(`\x1b[?${kittyFlags()}u`); return true; });
+    parser.registerCsiHandler({ prefix: ">", final: "u" }, (params) => {
+      if (this.kittyStack.length >= 32) this.kittyStack.shift();
+      this.kittyStack.push(Number(params[0]) || 0);
       return true;
+    });
+    parser.registerCsiHandler({ prefix: "<", final: "u" }, (params) => {
+      const n = Math.max(1, Number(params[0]) || 1);
+      this.kittyStack.splice(Math.max(0, this.kittyStack.length - n));
+      return true;
+    });
+    parser.registerCsiHandler({ prefix: "=", final: "u" }, (params) => {
+      const flags = Number(params[0]) || 0;
+      const mode = Number(params[1]) || 1;
+      const current = kittyFlags();
+      const next = mode === 2 ? current | flags : mode === 3 ? current & ~flags : flags;
+      if (this.kittyStack.length) this.kittyStack[this.kittyStack.length - 1] = next; else this.kittyStack.push(next);
+      return true;
+    });
+    parser.registerCsiHandler({ prefix: ">", final: "m" }, (params) => {
+      if ((Number(params[0]) || 0) === 4) this.modifyOtherKeys = params.length > 1 ? Number(params[1]) || 0 : 0;
+      return true;
+    });
+    this.term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || event.key !== "Enter" || event.metaKey) return true;
+      if (!event.shiftKey && !event.ctrlKey && !event.altKey) return true;
+      const mod = 1 + (event.shiftKey ? 1 : 0) + (event.altKey ? 2 : 0) + (event.ctrlKey ? 4 : 0);
+      if (kittyFlags() & 1) reply(`\x1b[13;${mod}u`);
+      else if (this.modifyOtherKeys === 2) reply(`\x1b[27;${mod};13~`);
+      // Without a protocol, ESC CR is what Claude Code's terminal setup
+      // installs for Shift+Enter in editors that lack one.
+      else if (event.shiftKey && !event.ctrlKey) reply("\x1b\r");
+      else return true;
+      return false;
     });
     this.term.onData((data) => { if (this.id !== null && !this.exited) api.ptyWrite(this.id, data).catch(() => {}); });
     this.term.onResize(({ cols, rows }) => { if (this.id !== null && !this.exited) api.ptyResize(this.id, cols, rows).catch(() => {}); });

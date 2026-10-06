@@ -97,6 +97,26 @@ async function selfTest() {
     setTimeout(() => api.ptyWrite(shell.term.id, "echo ORBIT_$((40+2)) agentvars=$(env | grep -c '^CLAUDE')\n"), 1500);
   });
   log(`terminal echo=${JSON.stringify(seen)} cols=${shell.term.term.cols} rows=${shell.term.term.rows}`);
+  const keyProbe = await new Promise((resolve) => {
+    let buf = "";
+    const orig = shell.term.write.bind(shell.term);
+    shell.term.write = (bytes) => { buf += new TextDecoder().decode(bytes); orig(bytes); const m = buf.match(/KEYPROBE (.*)/); if (m) resolve(m[1]); };
+    const press = () => shell.term.term.textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, shiftKey: true, bubbles: true, cancelable: true }));
+    const script = "import os,tty,termios,time;fd=0;old=termios.tcgetattr(fd);tty.setraw(fd);" +
+      "os.write(1,b'\\x1b[?u');time.sleep(.4);q=os.read(fd,64);" +
+      "os.write(1,b'REA'+b'DY1\\r\\n');k1=os.read(fd,64);" +
+      "os.write(1,b'\\x1b[>1u');time.sleep(.2);os.write(1,b'\\x1b[?u');time.sleep(.4);q2=os.read(fd,64);" +
+      "os.write(1,b'REA'+b'DY2\\r\\n');k2=os.read(fd,64);os.write(1,b'\\x1b[<u');" +
+      "termios.tcsetattr(fd,termios.TCSADRAIN,old);print('KEY'+'PROBE',repr(q),repr(k1),repr(q2),repr(k2))";
+    api.ptyWrite(shell.term.id, `python3 -c "${script}"\n`);
+    let stage = 0;
+    const tick = setInterval(() => {
+      if (stage === 0 && buf.includes("READY1\r")) { stage = 1; press(); }
+      else if (stage === 1 && buf.includes("READY2\r")) { stage = 2; press(); }
+    }, 100);
+    setTimeout(() => { clearInterval(tick); resolve("timeout " + JSON.stringify(buf.slice(-200))); }, 9000);
+  });
+  log(`keys ${keyProbe}`);
   // Quick open and search.
   const files = await api.walk(v.path);
   log(`walk files=${files.length}`);
