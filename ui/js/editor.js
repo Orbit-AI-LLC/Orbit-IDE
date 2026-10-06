@@ -12,8 +12,12 @@ let nextTabId = 1;
 
 export function loadMonaco() {
   return new Promise((resolve, reject) => {
+    // Classic workers from the stable copies made by scripts/vendor.sh. The
+    // build's default makes a module worker from a blob that imports the
+    // script, which a custom-scheme page cannot do.
+    const WORKERS = { json: "json", css: "css", scss: "css", less: "css", html: "html", handlebars: "html", razor: "html", typescript: "ts", javascript: "ts" };
     window.MonacoEnvironment = {
-      getWorkerUrl: () => "vendor/monaco/vs/base/worker/workerMain.js",
+      getWorker: (_moduleId, label) => new Worker(`vendor/monaco/workers/${WORKERS[label] || "editor"}.worker.js`, { name: label }),
     };
     window.require.config({ paths: { vs: "vendor/monaco/vs" } });
     window.require(["vs/editor/editor.main"], () => resolve(window.monaco), reject);
@@ -249,6 +253,7 @@ function showView() {
     diffHost.hidden = false;
     diffEditor.setModel({ original: tab.original, modified: tab.modified });
     diffEditor.layout();
+    requestAnimationFrame(() => diffEditor.layout());
     $("#status-language").textContent = "diff";
     $("#status-cursor").textContent = "";
   }
@@ -290,8 +295,7 @@ export async function closeTab(id, { force = false } = {}) {
     if (editor.getModel() === tab.model) editor.setModel(null);
     tab.model.dispose();
   } else {
-    tab.original.dispose();
-    tab.modified.dispose();
+    disposeDiffModels(tab);
   }
   if (v.activeTab === id) {
     const next = v.tabs[Math.min(idx, v.tabs.length - 1)];
@@ -303,11 +307,23 @@ export async function closeTab(id, { force = false } = {}) {
   return true;
 }
 
+/// The diff editor must let go of a pair of models before they are disposed,
+/// or Monaco throws "TextModel got disposed before DiffEditorWidget model got reset".
+function disposeDiffModels(tab) {
+  const current = diffEditor.getModel();
+  if (current && (current.original === tab.original || current.modified === tab.modified)) diffEditor.setModel(null);
+  tab.original.dispose();
+  tab.modified.dispose();
+}
+
 export async function closeAllTabs(projectPath) {
   const v = view(projectPath);
   if (!v) return;
   for (const tab of [...v.tabs]) {
-    if (tab.kind === "file") tab.model.dispose(); else { tab.original.dispose(); tab.modified.dispose(); }
+    if (tab.kind === "file") {
+      if (editor.getModel() === tab.model) editor.setModel(null);
+      tab.model.dispose();
+    } else disposeDiffModels(tab);
   }
   v.tabs = [];
   v.activeTab = null;

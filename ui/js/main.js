@@ -54,7 +54,16 @@ async function selfTest() {
   log(`git repo=${v.git && v.git.is_repo} branch=${v.git && v.git.branch} entries=${v.git ? v.git.entries.length : -1} staged=${v.git ? v.git.entries.filter((e) => e.staged).length : -1}`);
   const gitRows = $$("#git-panel .git-row");
   log(`git rows rendered=${gitRows.length}`);
-  if (gitRows[0]) { gitRows[0].click(); await new Promise((r) => setTimeout(r, 800)); log(`diff tab open=${!$("#diff-editor").hidden} tabs=${v.tabs.length}`); }
+  if (gitRows[0]) {
+    gitRows[0].click();
+    await new Promise((r) => setTimeout(r, 2500));
+    const de = state.monaco.editor.getDiffEditors()[0];
+    const changes = de && de.getLineChanges();
+    const visible = de ? de.getModifiedEditor().getVisibleRanges().length : -1;
+    log(`diff tab open=${!$("#diff-editor").hidden} lineChanges=${changes ? changes.length : "null (not computed)"} visibleRanges=${visible} tabs=${v.tabs.length}`);
+    const diffTab = v.tabs.find((t) => t.kind === "diff");
+    if (diffTab) { try { await closeTab(diffTab.id); log(`diff tab closed cleanly tabs=${v.tabs.length}`); } catch (err) { log(`diff close threw ${formatError(err)}`); } }
+  }
   // Terminal round trip.
   await newShell();
   const shell = v.activeShell;
