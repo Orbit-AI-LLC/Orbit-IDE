@@ -55,6 +55,22 @@ async function selfTest() {
   log(`git repo=${v.git && v.git.is_repo} branch=${v.git && v.git.branch} entries=${v.git ? v.git.entries.length : -1} staged=${v.git ? v.git.entries.filter((e) => e.staged).length : -1}`);
   const gitRows = $$("#git-panel .git-row");
   log(`git rows rendered=${gitRows.length}`);
+  const nestedRow = $$("#git-panel .git-row").find((r) => r.querySelector(".nested-tag"));
+  if (nestedRow) {
+    nestedRow.click();
+    await new Promise((r) => setTimeout(r, 800));
+    const items = $$("#context-menu button");
+    log(`nested menu items=${JSON.stringify(items.map((b) => b.textContent))}`);
+    const file = items.find((b) => /\.txt$/.test(b.textContent));
+    if (file) {
+      file.click();
+      await new Promise((r) => setTimeout(r, 2500));
+      const de = state.monaco.editor.getDiffEditors()[0];
+      const m = de && de.getModel();
+      log(`nested diff lineChanges=${de && de.getLineChanges() ? de.getLineChanges().length : "null"} modifiedText=${JSON.stringify(m ? m.modified.getValue().slice(0, 40) : "")}`);
+      const t = v.tabs.find((x) => x.kind === "diff"); if (t) await closeTab(t.id);
+    }
+  }
   if (v.git && v.git.entries) log(`git entries ${JSON.stringify(v.git.entries.map((e) => ({ p: e.path, sub: e.submodule, stageable: e.stageable, inner: e.sub_changes, add: e.add, del: e.del })))}`);
   if (gitRows[0]) {
     gitRows[0].click();

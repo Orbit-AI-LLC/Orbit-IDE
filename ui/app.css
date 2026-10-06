@@ -337,8 +337,8 @@ button.status-item:hover { background: var(--bg-hover); color: var(--text); }
 .palette-empty { padding: 14px 16px; color: var(--text-faint); }
 
 /* Context menu */
-.context-menu { position: fixed; z-index: 60; min-width: 180px; padding: 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
-.context-menu button { display: flex; width: 100%; align-items: center; justify-content: space-between; height: 26px; padding: 0 10px; border-radius: 5px; text-align: left; font-size: 12.5px; }
+.context-menu { position: fixed; z-index: 60; min-width: 180px; max-width: 520px; max-height: 70vh; overflow-y: auto; padding: 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.context-menu button { display: flex; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; align-items: center; justify-content: space-between; height: 26px; padding: 0 10px; border-radius: 5px; text-align: left; font-size: 12.5px; }
 .context-menu button:hover { background: var(--accent); color: var(--accent-text); }
 .context-menu button.danger { color: var(--red); }
 .context-menu button.danger:hover { background: var(--red); color: #fff; }

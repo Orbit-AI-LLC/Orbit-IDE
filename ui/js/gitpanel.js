@@ -257,12 +257,8 @@ function row(status, entry) {
     ]),
     el("span", { class: `letter s-${letter}`, text: letter }),
   ]);
-  node.addEventListener("click", async () => {
-    if (entry.submodule && !entry.stageable) {
-      const ok = await confirmDialog(`${basename(entry.path)} is a nested repository`, `${nestedNote} Its own commits are made there; this repository only records which commit it points at.`, { ok: "Open as project" });
-      if (ok) emit("open-project", abs);
-      return;
-    }
+  node.addEventListener("click", async (event) => {
+    if (entry.submodule) { nestedMenu(abs, event.clientX, event.clientY); return; }
     v.gitSelected = entry.path; showDiff(status, entry); render();
   });
   node.addEventListener("contextmenu", (event) => {
@@ -289,6 +285,25 @@ function row(status, entry) {
     ]);
   });
   return node;
+}
+
+/// A nested repository's own changed files: pick one to see its diff
+/// (against the nested repository's HEAD), or open it as a project.
+async function nestedMenu(abs, x, y) {
+  let inner;
+  try { inner = await api.gitStatus(abs); } catch (err) { toast(formatError(err), "error"); return; }
+  const items = [{ label: "Open as project", action: () => emit("open-project", abs) }];
+  if (inner && inner.is_repo && inner.entries.length) {
+    items.push({ separator: true });
+    for (const e of inner.entries.slice(0, 40)) {
+      const letter = e.untracked ? "U" : e.conflicted ? "C" : (e.worktree !== " " ? e.worktree : e.index);
+      items.push({ label: `${letter}   ${e.path}`, action: () => (e.submodule ? nestedMenu(joinPath(inner.root, e.path), x, y) : showDiff(inner, e)) });
+    }
+    if (inner.entries.length > 40) items.push({ label: `${inner.entries.length - 40} more: open as project to see them`, disabled: true });
+  } else {
+    items.push({ label: "No changes inside", disabled: true });
+  }
+  contextMenu(x, y, items);
 }
 
 /// HEAD against the working tree: the whole change for the file.
