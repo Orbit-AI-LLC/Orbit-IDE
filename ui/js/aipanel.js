@@ -81,13 +81,24 @@ function renderBody() {
   const p = PROVIDERS.find((x) => x.id === id);
   if (id === "openrouter") { renderChat(v); return; }
   const term = v.agents[id];
-  if (term && !term.exited) {
+  if (term) {
     actionsEl.append(
-      el("button", { class: "icon-btn", title: "Restart", text: "↻", onclick: async () => { if (await confirmDialog(`Restart ${p.name}?`, "The running session is stopped.", { ok: "Restart" })) startAgent(p, []); } }),
-      el("button", { class: "icon-btn", title: "Stop", text: "×", onclick: () => term.kill() }),
+      el("button", { class: "icon-btn", title: "Restart", text: "↻", onclick: async () => {
+        if (term.exited || await confirmDialog(`Restart ${p.name}?`, "The running session is stopped.", { ok: "Restart" })) startAgent(p, []);
+      } }),
+      el("button", { class: "icon-btn", title: term.exited ? "Close" : "Stop", text: "×", onclick: () => { if (term.exited) closeAgent(v, id); else term.kill(); } }),
     );
-    if (term.exitBar) term.exitBar.remove();
-    requestAnimationFrame(() => term.focus());
+    if (term.exitBar) { term.exitBar.remove(); term.exitBar = null; }
+    if (term.exited) {
+      term.exitBar = el("div", { class: "term-exit" }, [
+        el("span", { text: `${p.name} session ended${term.exitCode !== undefined && term.exitCode !== null ? ` (exit ${term.exitCode})` : ""}. The output stays until you close it.` }),
+        el("button", { class: "btn", text: "Restart", onclick: () => startAgent(p, []) }),
+        el("button", { class: "btn", text: "Close", onclick: () => closeAgent(v, id) }),
+      ]);
+      term.el.append(term.exitBar);
+    } else {
+      requestAnimationFrame(() => term.focus());
+    }
     return;
   }
   const info = provider(id) || { available: false, detail: "" };
@@ -109,6 +120,14 @@ function renderBody() {
     !info.available ? el("button", { class: "btn", text: "Check again", onclick: () => refreshProviders() }) : null,
   ])]);
   bodyEl.append(start);
+}
+
+function closeAgent(v, id) {
+  const term = v.agents[id];
+  if (!term) return;
+  term.dispose();
+  delete v.agents[id];
+  renderAll();
 }
 
 async function startAgent(p, leadArgs) {

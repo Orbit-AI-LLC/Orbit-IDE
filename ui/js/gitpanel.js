@@ -76,13 +76,20 @@ function stagedState(entry) {
   return "none";
 }
 
+// The panel's chrome (branch row, commit box) is built once per repository
+// and updated in place: a rebuild on every refresh would replace the button
+// under a click in progress (files change constantly while an agent works)
+// and drop the click.
+let ui = null;
+
 function render() {
   const v = view();
-  host.innerHTML = "";
-  if (!v) { host.append(el("div", { class: "git-empty", text: "Open a project to see its source control." })); return; }
-  const status = v.git;
-  if (!status) { host.append(el("div", { class: "git-empty", text: "Loading…" })); return; }
-  if (!status.is_repo) {
+  const status = v && v.git;
+  if (!v || !status || !status.is_repo) {
+    ui = null;
+    host.innerHTML = "";
+    if (!v) { host.append(el("div", { class: "git-empty", text: "Open a project to see its source control." })); return; }
+    if (!status) { host.append(el("div", { class: "git-empty", text: "Loading…" })); return; }
     host.append(el("div", { class: "git-empty" }, [
       el("p", { text: status.error || "This folder is not a git repository." }),
       el("button", { class: "btn primary", text: "Initialize repository", onclick: async () => {
@@ -91,69 +98,109 @@ function render() {
     ]));
     return;
   }
-  const entries = status.entries;
-  const selected = entries.filter((e) => e.staged);
-  const totals = entries.reduce((t, e) => { t.add += e.add; t.del += e.del; return t; }, { add: 0, del: 0 });
-  const wrap = el("div", { class: "git-panel" });
+  if (!ui || ui.path !== v.path || !host.contains(ui.wrap)) buildUi(v);
+  updateUi(v);
+}
 
+function currentStatus() {
+  const v = view();
+  return v && v.git && v.git.is_repo ? v.git : null;
+}
+
+function buildUi(v) {
+  host.innerHTML = "";
+  const u = { path: v.path, listKey: null };
   // Branch and sync.
-  const branchBtn = el("button", { class: "branch-btn", title: "Switch branch" }, [el("span", { text: status.branch }), el("span", { class: "caret", text: "▾" })]);
-  branchBtn.addEventListener("click", () => branchMenu(branchBtn));
-  const sync = el("div", { class: "git-sync" }, [
-    el("button", { class: "icon-btn", title: "Fetch", text: "↻", onclick: () => sync_(() => api.gitFetch(status.root), "Fetched.") }),
-    el("button", { class: "icon-btn", title: "Pull", onclick: () => sync_(() => api.gitPull(status.root), "Pulled.") }, [`↓${status.behind ? " " + status.behind : ""}`]),
-    el("button", { class: "icon-btn", title: status.upstream ? "Push" : "Publish branch", onclick: () => sync_(() => api.gitPush(status.root), "Pushed.") }, [`↑${status.ahead ? " " + status.ahead : ""}`]),
-  ]);
-  const top = el("div", { class: "git-top" }, [el("div", { class: "git-branch-row" }, [branchBtn, sync])]);
-
+  u.branchBtn = el("button", { class: "branch-btn", title: "Switch branch" }, [el("span", { text: "" }), el("span", { class: "caret", text: "▾" })]);
+  u.branchBtn.addEventListener("click", () => branchMenu(u.branchBtn));
+  u.fetchBtn = el("button", { class: "icon-btn", title: "Fetch", text: "↻", onclick: () => { const s = currentStatus(); if (s) sync_(() => api.gitFetch(s.root), "Fetched."); } });
+  u.pullBtn = el("button", { class: "icon-btn", title: "Pull", onclick: () => { const s = currentStatus(); if (s) sync_(() => api.gitPull(s.root), "Pulled."); } });
+  u.pushBtn = el("button", { class: "icon-btn", title: "Push", onclick: () => { const s = currentStatus(); if (s) sync_(() => api.gitPush(s.root), "Pushed."); } });
   // Commit box.
-  const textarea = el("textarea", { placeholder: selected.length ? `Message for ${selected.length} ${selected.length === 1 ? "file" : "files"} (⌘Enter to commit)` : "Select files below, then write or generate a message", spellcheck: "true" });
-  textarea.value = v.commitDraft || "";
-  textarea.addEventListener("input", () => { v.commitDraft = textarea.value; });
-  textarea.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); doCommit(textarea, false); }
+  u.textarea = el("textarea", { spellcheck: "true" });
+  u.textarea.value = v.commitDraft || "";
+  u.textarea.addEventListener("input", () => { v.commitDraft = u.textarea.value; });
+  u.textarea.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); doCommit(u.textarea, false); }
   });
-  const currentProvider = provider(state.settings.commit_provider) || state.providers[0] || { id: "claude", name: "Claude" };
-  const generateBtn = el("button", { class: `btn ${generating ? "busy" : ""}`, title: `Write the message from the selected changes with ${currentProvider.name}`, disabled: generating }, [generating ? "Writing…" : "✦ Generate"]);
-  generateBtn.addEventListener("click", () => generateMessage(textarea, currentProvider.id));
-  const providerBtn = el("button", { class: "btn", title: "Provider that writes the message", disabled: generating }, [el("span", { class: "ellipsis", text: currentProvider.name }), el("span", { class: "caret", text: "▾" })]);
-  providerBtn.addEventListener("click", () => {
-    const rect = providerBtn.getBoundingClientRect();
+  u.generateBtn = el("button", { class: "btn", text: "✦ Generate" });
+  u.generateBtn.addEventListener("click", () => generateMessage(u.textarea, state.settings.commit_provider));
+  u.providerLabel = el("span", { class: "ellipsis", text: "" });
+  u.providerBtn = el("button", { class: "btn", title: "Provider that writes the message" }, [u.providerLabel, el("span", { class: "caret", text: "▾" })]);
+  u.providerBtn.addEventListener("click", () => {
+    const rect = u.providerBtn.getBoundingClientRect();
     contextMenu(rect.left, rect.bottom + 4, state.providers.map((p) => ({
-      label: `${p.id === currentProvider.id ? "✓ " : ""}${p.name}${p.available ? "" : "  (not set up)"}`,
+      label: `${p.id === state.settings.commit_provider ? "✓ " : ""}${p.name}${p.available ? "" : "  (not set up)"}`,
       action: () => { saveSettings({ commit_provider: p.id }); render(); },
     })));
   });
-  const commitBtn = el("button", { class: "btn primary", disabled: busy || generating, onclick: () => doCommit(textarea, false) }, [busy ? "Working…" : selected.length ? `Commit ${selected.length} ${selected.length === 1 ? "file" : "files"}` : "Commit"]);
-  const moreBtn = el("button", { class: "btn primary caret-btn", text: "▾", title: "More ways to commit", disabled: busy, onclick: () => {
-    const rect = moreBtn.getBoundingClientRect();
+  u.commitBtn = el("button", { class: "btn primary", text: "Commit", onclick: () => doCommit(u.textarea, false) });
+  u.moreBtn = el("button", { class: "btn primary caret-btn", text: "▾", title: "More ways to commit" });
+  u.moreBtn.addEventListener("click", () => {
+    const rect = u.moreBtn.getBoundingClientRect();
     contextMenu(rect.right - 200, rect.bottom + 4, [
-      { label: "Commit", action: () => doCommit(textarea, false) },
-      { label: "Commit and push", action: () => doCommit(textarea, true) },
+      { label: "Commit", action: () => doCommit(u.textarea, false) },
+      { label: "Commit and push", action: () => doCommit(u.textarea, true) },
       { label: "Amend last commit", action: async () => {
-        if (await confirmDialog("Amend the last commit?", "The selected changes and this message replace the previous commit. Avoid this on a pushed branch.", { ok: "Amend" })) commitWith(textarea, { amend: true });
+        if (await confirmDialog("Amend the last commit?", "The selected changes and this message replace the previous commit. Avoid this on a pushed branch.", { ok: "Amend" })) commitWith(u.textarea, { amend: true });
       } },
       { separator: true },
-      { label: "Select all and commit", action: async () => { await api.gitStage(status.root, []); await refreshGit(); doCommit(host.querySelector("textarea") || textarea, false); } },
+      { label: "Select all and commit", action: async () => { const s = currentStatus(); if (!s) return; await api.gitStage(s.root, []); await refreshGit(); doCommit(u.textarea, false); } },
     ]);
-  } });
-  top.append(el("div", { class: "commit-box" }, [
-    textarea,
-    el("div", { class: "commit-row split" }, [generateBtn, providerBtn]),
-    el("div", { class: "commit-row split" }, [commitBtn, moreBtn]),
-  ]));
-  wrap.append(top);
+  });
+  u.top = el("div", { class: "git-top" }, [
+    el("div", { class: "git-branch-row" }, [u.branchBtn, el("div", { class: "git-sync" }, [u.fetchBtn, u.pullBtn, u.pushBtn])]),
+    el("div", { class: "commit-box" }, [
+      u.textarea,
+      el("div", { class: "commit-row split" }, [u.generateBtn, u.providerBtn]),
+      el("div", { class: "commit-row split" }, [u.commitBtn, u.moreBtn]),
+    ]),
+  ]);
+  u.lists = el("div", { class: "panel-body git-lists" });
+  u.wrap = el("div", { class: "git-panel" }, [u.top, u.lists]);
+  host.append(u.wrap);
+  ui = u;
+}
 
-  // The changes list.
-  const lists = el("div", { class: "panel-body git-lists" });
-  if (!entries.length) lists.append(el("div", { class: "git-empty", text: "No changes." }));
+function updateUi(v) {
+  const u = ui;
+  const status = v.git;
+  const entries = status.entries;
+  const selected = entries.filter((e) => e.staged);
+  // Branch and sync.
+  u.branchBtn.firstChild.textContent = status.branch;
+  u.pullBtn.textContent = `↓${status.behind ? " " + status.behind : ""}`;
+  u.pushBtn.textContent = `↑${status.ahead ? " " + status.ahead : ""}`;
+  u.pushBtn.title = status.upstream ? "Push" : "Publish branch";
+  for (const b of [u.fetchBtn, u.pullBtn, u.pushBtn]) b.disabled = busy;
+  // Commit box.
+  u.textarea.placeholder = selected.length ? `Message for ${selected.length} ${selected.length === 1 ? "file" : "files"} (⌘Enter to commit)` : "Select files below, then write or generate a message";
+  if (document.activeElement !== u.textarea && u.textarea.value !== (v.commitDraft || "")) u.textarea.value = v.commitDraft || "";
+  const current = provider(state.settings.commit_provider) || state.providers[0] || { id: "claude", name: "Claude" };
+  u.providerLabel.textContent = current.name;
+  u.generateBtn.textContent = generating ? "Writing…" : "✦ Generate";
+  u.generateBtn.classList.toggle("busy", generating);
+  u.generateBtn.title = `Write the message from the selected changes with ${current.name}`;
+  u.generateBtn.disabled = generating;
+  u.providerBtn.disabled = generating;
+  u.commitBtn.textContent = busy ? "Working…" : selected.length ? `Commit ${selected.length} ${selected.length === 1 ? "file" : "files"}` : "Commit";
+  u.commitBtn.disabled = busy || generating;
+  u.moreBtn.disabled = busy;
+  // The list, rebuilt only when its content changed.
+  const log = v.log || [];
+  const key = JSON.stringify([entries.map((e) => [e.path, e.index, e.worktree, e.staged, e.unstaged, e.add, e.del]), showLog, log.map((c) => c.short), v.gitSelected]);
+  if (key === u.listKey) return;
+  u.listKey = key;
+  u.lists.innerHTML = "";
+  if (!entries.length) u.lists.append(el("div", { class: "git-empty", text: "No changes." }));
   else {
+    const totals = entries.reduce((t, e) => { t.add += e.add; t.del += e.del; return t; }, { add: 0, del: 0 });
     const allState = entries.every((e) => stagedState(e) === "all") ? "all" : entries.some((e) => e.staged) ? "part" : "none";
     const master = el("input", { type: "checkbox", title: allState === "all" ? "Unselect all" : "Select all" });
     master.checked = allState === "all";
     master.indeterminate = allState === "part";
     master.addEventListener("change", () => act(() => allState === "all" ? api.gitUnstage(status.root, []) : api.gitStage(status.root, [])));
-    lists.append(el("div", { class: "git-section-header" }, [
+    u.lists.append(el("div", { class: "git-section-header" }, [
       master,
       el("span", { text: "Changes" }),
       el("span", { class: "count", text: `${selected.length}/${entries.length}` }),
@@ -162,23 +209,19 @@ function render() {
         el("button", { class: "icon-btn sm", title: "Discard all changes", text: "↶", onclick: () => discard(status, entries.filter((e) => !e.conflicted)) }),
       ]),
     ]));
-    for (const entry of entries) lists.append(row(status, entry));
+    for (const entry of entries) u.lists.append(row(status, entry));
   }
-  // Recent commits.
-  const log = v.log || [];
   if (log.length) {
     const header = el("div", { class: "git-section-header clickable" }, [
       el("span", { class: "tree-arrow", text: "▶", style: showLog ? "transform:rotate(90deg)" : "" }),
       el("span", { text: "Commits" }), el("span", { class: "count", text: log.length }),
     ]);
     header.addEventListener("click", () => { showLog = !showLog; render(); });
-    lists.append(header);
+    u.lists.append(header);
     if (showLog) for (const c of log) {
-      lists.append(el("div", { class: "git-log-row", title: `${c.hash}\n${c.author}, ${c.when}` }, [el("span", { class: "hash", text: c.short }), el("span", { class: "subject", text: c.subject }), el("span", { class: "when", text: c.when })]));
+      u.lists.append(el("div", { class: "git-log-row", title: `${c.hash}\n${c.author}, ${c.when}` }, [el("span", { class: "hash", text: c.short }), el("span", { class: "subject", text: c.subject }), el("span", { class: "when", text: c.when })]));
     }
   }
-  wrap.append(lists);
-  host.append(wrap);
 }
 
 function row(status, entry) {
@@ -289,6 +332,7 @@ async function commitWith(textarea, { push = false, amend = false } = {}) {
     await saveAll();
     const summary = await api.gitCommit(v.git.root, message, amend);
     v.commitDraft = "";
+    if (ui && ui.textarea) ui.textarea.value = "";
     toast(`Committed ${summary}`, "success");
     if (push) {
       const out = await api.gitPush(v.git.root);
@@ -327,11 +371,11 @@ export async function generateMessage(textarea, providerId) {
     const message = cleanMessage(raw);
     if (!message) throw new Error("The provider returned an empty message.");
     v.commitDraft = message;
+    if (ui && ui.textarea) ui.textarea.value = message;
   } catch (err) { toast(formatError(err), "error"); }
   generating = false;
   render();
-  const box = host.querySelector("textarea");
-  if (box) box.focus();
+  if (ui && ui.textarea) ui.textarea.focus();
 }
 
 function buildPrompt({ status, selected, left, diff, log }) {

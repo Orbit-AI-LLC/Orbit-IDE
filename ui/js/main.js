@@ -80,6 +80,17 @@ async function selfTest() {
       log(`complete ${p.id} ms=${Date.now() - t0} out=${JSON.stringify(out.slice(0, 80))}`);
     } catch (err) { log(`complete ${p.id} error=${formatError(err)}`); }
   }
+  // An agent's shell stays open after the agent exits.
+  const agentResult = await new Promise(async (resolve) => {
+    let buf = "", exited = false;
+    const { listen } = await import("./api.js");
+    const unData = await listen("pty:data", ({ id, data }) => { if (id === agentId) buf += atob(data); });
+    const unExit = await listen("pty:exit", ({ id }) => { if (id === agentId) exited = true; });
+    const agentId = await api.ptySpawn(v.path, "true", [], 80, 24);
+    setTimeout(() => { unData(); unExit(); resolve(`sawExitNote=${buf.includes("exited with status 0")} shellStillOpen=${!exited}`); }, 4000);
+    setTimeout(() => api.ptyKill(agentId), 4500);
+  });
+  log(`agent shell ${agentResult}`);
   log("DONE");
 }
 

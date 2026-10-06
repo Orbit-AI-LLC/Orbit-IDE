@@ -44,8 +44,9 @@ pub fn spawn(app: &AppHandle, state: &PtyState, cwd: &str, program: Option<Strin
     let mut cmd = if cfg!(windows) {
         match program {
             Some(program) => {
+                // /k keeps the prompt open after the agent exits.
                 let mut cmd = CommandBuilder::new("cmd.exe");
-                cmd.args(["/d", "/c", &program]);
+                cmd.args(["/d", "/k", &program]);
                 for a in args {
                     cmd.arg(a);
                 }
@@ -57,9 +58,14 @@ pub fn spawn(app: &AppHandle, state: &PtyState, cwd: &str, program: Option<Strin
         let mut cmd = CommandBuilder::new(&shell);
         match program {
             Some(program) => {
-                // The login shell sets up the user's environment, then becomes the agent.
+                // The login shell sets up the user's environment and runs the agent.
+                // When the agent exits the shell stays open, with the agent's last
+                // output still visible, until the user closes the tab.
                 cmd.arg("-lc");
-                cmd.arg("exec \"$0\" \"$@\"");
+                cmd.arg(format!(
+                    "\"$0\" \"$@\"; s=$?; printf '\\n\\033[2m[%s exited with status %s. This shell stays open: run it again, or close the tab.]\\033[0m\\n' \"$0\" \"$s\"; exec '{shell}' -l",
+                    shell = shell.replace('\'', "'\\''")
+                ));
                 cmd.arg(program);
                 for a in args {
                     cmd.arg(a);

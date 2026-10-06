@@ -41,6 +41,16 @@ export class Term {
     this.term.loadAddon(this.fit);
     this.term.loadAddon(new WebLinksAddon((event, uri) => api.openExternal(uri).catch(() => {})));
     this.term.open(this.el);
+    // Claude Code and friends read Shift+Enter as ESC CR (what iTerm2 and the
+    // VS Code binding send). Plain xterm would send a bare CR.
+    this.term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      if (event.key === "Enter" && event.shiftKey && !event.metaKey && !event.ctrlKey) {
+        if (this.id !== null && !this.exited) api.ptyWrite(this.id, "\x1b\r").catch(() => {});
+        return false;
+      }
+      return true;
+    });
     this.term.onData((data) => { if (this.id !== null && !this.exited) api.ptyWrite(this.id, data).catch(() => {}); });
     this.term.onResize(({ cols, rows }) => { if (this.id !== null && !this.exited) api.ptyResize(this.id, cols, rows).catch(() => {}); });
     this.observer = new ResizeObserver(() => this.fitNow());
