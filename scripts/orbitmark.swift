@@ -1,13 +1,19 @@
-// Orbit IDE mark renderer.
+// Orbit family mark renderer.
 //
-// The mark: the Orbit family's comet (one satellite, a trail tapering behind
-// it round a single orbit, as in Orbit AI's mark) with a pair of code
-// chevrons in the centre: the editor, in orbit. The orbit, trail and satellite
-// are the same geometry as Orbit AI's and Orbit Chat's marks so the apps sit
-// together as one family.
+// The Orbit apps' marks share one idea: the app's own object (a spark, an
+// envelope, a calendar page, a speech bubble, a terminal window, a rocket,
+// a planet) in white on its own colour, with a tilted orbit round it and a
+// moon riding the orbit at the top right. The orbit passes behind the object
+// above and in front of it below, with a clear gap wherever the two cross,
+// so every mark reads as something in orbit. Orbit Pass keeps its own mark
+// (the flat ring, moon and keyhole on black); this file doesn't draw it.
 //
-// Every raster of the mark is generated from this one piece of geometry by
-// scripts/build_icon.py, which also asks this program for the SVG form.
+// This one file is the same in every Orbit repository that ships one of
+// these marks (Orbit AI, Orbit Chat, Orbit IDE, Orbit Mail, Orbit Mission
+// Control and the Orbit Website), so the family is designed in one place.
+// Each repository's scripts/build_icon.py compiles it and writes that app's
+// icons. Edit the geometry or the colours here, copy the file to the other
+// repositories, and re-run their build_icon.py; never edit the outputs.
 //
 // Build (the toolchain compiler is enough, no Xcode licence needed):
 //
@@ -17,148 +23,405 @@
 //
 // Usage:
 //
-//   orbitmark <out.png> <width> <height> <fg> <bg> <scale> [bold] [opaque]
-//   orbitmark --svg <scale> [bold]
+//   orbitmark png <mark> <out.png> <width>[x<height>] <layout> [small|tiny] [opaque]
+//   orbitmark svg <mark> <layout> <width>[x<height>] [small|tiny]   an SVG document, on stdout
+//   orbitmark path <mark> <box> <fill> [small|tiny]                 bare path data in a box-unit square
+//   orbitmark colour <mark>                                         the mark's one flat colour
 //
-//   fg       black | white
-//   bg       none | white | black | tile-white | tile-black | mac-black
-//   scale    fraction of the canvas width the mark's bounding box spans
-//   bold     thicker trail and chevrons, for favicon sizes
-//   opaque   no alpha channel
-//   --svg    print the mark as SVG elements in a 1024x1024 box; the chevrons
-//            are stroked with the colour token __INK__ for the caller to fill in
-import CoreGraphics; import Foundation; import ImageIO; import UniformTypeIdentifiers
-let args = CommandLine.arguments
-let svgMode = args.count > 1 && args[1] == "--svg"
-let bold = args.contains("bold"); let opaque = args.contains("opaque")
-func envD(_ k: String, _ d: Double) -> Double { ProcessInfo.processInfo.environment[k].flatMap(Double.init) ?? d }
+//   mark     ai | mail | calendar | chat | ide | control | orbit
+//   layout   bleed    the colour square, edge to edge (iOS app icons, touch icons)
+//            mac      the macOS icon grid: an 824/1024 tile with 185/1024 corners
+//            tile     a rounded tile over the whole canvas (favicons, in-app marks)
+//            colour   the bare mark in its own colours, no tile (logos on pages)
+//            black | white | current   the bare mark in one ink (current is
+//                     currentColor, SVG only)
+//            dark     iOS's dark icon: the mark in its colours on nothing
+//            tinted   iOS's tinted icon: the mark in white on nothing
+//   small    bolder: a thicker orbit, a bigger moon, fewer details (48 px and under)
+//   tiny     the object alone, without its orbit (16 px)
+//   opaque   no alpha channel (the App Store icon)
+//
+// A bare layout given only a width gets the mark's own proportions.
+import CoreGraphics
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
+
+typealias P = CGPoint
+let D = CGFloat.pi / 180
 let cs = CGColorSpace(name: CGColorSpace.sRGB)!
 
-// Geometry, orbit diameter = 1.0, as in Orbit AI's mark.
-let orbitR = 0.5
-let headT = envD("ORB_HEAD", 40.0) * .pi / 180
-let sweep = envD("ORB_SWEEP", 315.0) * .pi / 180
-let wMax = bold ? envD("ORB_W", 0.12) + 0.03 : envD("ORB_W", 0.12)
-let wMin = envD("ORB_WMIN", 0.008)
-let headR = bold ? envD("ORB_HEADR", 0.085) + 0.02 : envD("ORB_HEADR", 0.085)
-// The chevrons: "<" and ">" centred, each an open polyline with round caps.
-let chevH = envD("ORB_CHEVH", 0.13)      // half height
-let chevW = envD("ORB_CHEVW", 0.115)     // horizontal depth of each chevron
-let chevGap = envD("ORB_CHEVGAP", 0.055) // half of the gap between their points
-let chevStroke = bold ? envD("ORB_CHEVS", 0.075) + 0.02 : envD("ORB_CHEVS", 0.075)
+// MARK: - Shapes, in a 1024 box with y running down (as in SVG)
 
-let L = 2400; let unit = Double(L) * 0.72
-let c = CGPoint(x: Double(L) / 2, y: Double(L) / 2)
-func P(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: c.x + x * unit, y: c.y + y * unit) }
-func op(_ t: Double, _ r: Double) -> CGPoint { P(r * cos(t), r * sin(t)) }
-
-func trailPoints(_ n: Int) -> (outer: [CGPoint], inner: [CGPoint], endT: Double) {
-    let t0 = headT - sweep, t1 = headT
-    var outer: [CGPoint] = [], inner: [CGPoint] = []
-    for i in 0...n {
-        let f = Double(i) / Double(n)
-        let t = t0 + (t1 - t0) * f
-        let w = wMin + (wMax - wMin) * pow(f, envD("ORB_EASE", 0.75))
-        outer.append(op(t, orbitR + w / 2)); inner.append(op(t, orbitR - w / 2))
-    }
-    return (outer, inner, t1)
+func disc(_ c: P, _ r: CGFloat) -> CGPath { CGPath(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r), transform: nil) }
+func rrect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> CGPath {
+    CGPath(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerWidth: r, cornerHeight: r, transform: nil)
 }
-func trailPath() -> CGPath {
-    let p = CGMutablePath()
-    let pts = trailPoints(600)
-    p.move(to: pts.outer[0]); for q in pts.outer.dropFirst() { p.addLine(to: q) }
-    let cEnd = op(pts.endT, orbitR)
-    p.addArc(center: cEnd, radius: wMax / 2 * unit, startAngle: pts.endT, endAngle: pts.endT + .pi, clockwise: true)
-    for q in pts.inner.reversed() { p.addLine(to: q) }
+func line(_ pts: [P]) -> CGPath { let p = CGMutablePath(); p.addLines(between: pts); return p }
+func stroked(_ p: CGPath, _ w: CGFloat) -> CGPath { p.copy(strokingWithWidth: w, lineCap: .round, lineJoin: .round, miterLimit: 4) }
+func grown(_ p: CGPath, _ g: CGFloat) -> CGPath { p.union(stroked(p, 2 * g)) }
+func dist(_ a: P, _ b: P) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
+func moved(_ p: CGPath, _ t: CGAffineTransform) -> CGPath { var t = t; return p.copy(using: &t)! }
+func turned(_ p: CGPath, about c: P, by deg: CGFloat) -> CGPath {
+    moved(p, CGAffineTransform(translationX: c.x, y: c.y).rotated(by: deg * D).translatedBy(x: -c.x, y: -c.y))
+}
+
+enum Detail { case full, small, tiny }
+
+// MARK: - The orbit: a tilted ellipse with a moon riding it
+
+struct Orbit {
+    var c = P(x: 512, y: 512)
+    var rx: CGFloat = 380, ry: CGFloat = 116
+    var tilt: CGFloat = -22      // degrees; negative rises to the right
+    var w: CGFloat = 40          // ring width
+    var moonAt: CGFloat = -12    // where the moon sits: 0 is the right end, negative the far side
+    var moonR: CGFloat = 46
+    var gap: CGFloat = 22        // the clearance the ring keeps from the moon and the object
+
+    func at(_ t: CGFloat) -> P {
+        let x = rx * cos(t * D), y = ry * sin(t * D), a = tilt * D
+        return P(x: c.x + x * cos(a) - y * sin(a), y: c.y + x * sin(a) + y * cos(a))
+    }
+    var moon: P { at(moonAt) }
+    /// The ring's centre line, from just past the moon all the way round to just before it.
+    var centreline: CGPath {
+        let clear = moonR + gap + w / 2
+        var t0 = moonAt; while dist(at(t0), moon) < clear { t0 += 0.05 }
+        var t1 = moonAt + 360; while dist(at(t1), moon) < clear { t1 -= 0.05 }
+        // A unit circle's arc, squashed and tilted, so the path keeps true curves.
+        let p = CGMutablePath()
+        p.addArc(center: .zero, radius: 1, startAngle: t0 * D, endAngle: t1 * D, clockwise: false,
+                 transform: CGAffineTransform(translationX: c.x, y: c.y).rotated(by: tilt * D).scaledBy(x: rx, y: ry))
+        return p
+    }
+    /// The near half of the orbit's plane, which passes in front of the object.
+    var near: CGPath {
+        moved(CGPath(rect: CGRect(x: -2000, y: 0, width: 4000, height: 2000), transform: nil),
+              CGAffineTransform(translationX: c.x, y: c.y).rotated(by: tilt * D))
+    }
+    /// Bolder, for small sizes.
+    func bolder() -> Orbit { var o = self; o.w *= 1.5; o.moonR *= 1.25; o.gap *= 1.3; return o }
+}
+
+/// The object with the orbit round it.
+func orbiting(_ body: CGPath, _ o: Orbit?) -> CGPath {
+    guard let o else { return body }
+    let ring = stroked(o.centreline, o.w)
+    let front = ring.intersection(o.near)
+    // Behind the object. A sliver left between the object and the moon would
+    // read as a stray dash, so pieces that short are dropped.
+    let back = ring.subtracting(o.near).subtracting(grown(body, o.gap)).componentsSeparated()
+        .filter { max($0.boundingBoxOfPath.width, $0.boundingBoxOfPath.height) > o.w * 2.5 }
+    var g = body.subtracting(grown(front, o.gap)).union(front)
+    for piece in back { g = g.union(piece) }
+    return g.union(disc(o.moon, o.moonR).subtracting(grown(body, o.gap)))
+}
+
+// MARK: - The objects
+
+/// Orbit AI: a four-point spark.
+func spark(_ c: P, _ r: CGFloat) -> CGPath {
+    let p = CGMutablePath(), k = r * 0.2, h = r * 0.82
+    p.move(to: P(x: c.x, y: c.y - r))
+    p.addQuadCurve(to: P(x: c.x + h, y: c.y), control: P(x: c.x + k, y: c.y - k))
+    p.addQuadCurve(to: P(x: c.x, y: c.y + r), control: P(x: c.x + k, y: c.y + k))
+    p.addQuadCurve(to: P(x: c.x - h, y: c.y), control: P(x: c.x - k, y: c.y + k))
+    p.addQuadCurve(to: P(x: c.x, y: c.y - r), control: P(x: c.x - k, y: c.y - k))
     p.closeSubpath()
     return p
 }
-func disc(_ p: CGPoint, _ r: Double) -> CGPath { CGPath(ellipseIn: CGRect(x: p.x - r * unit, y: p.y - r * unit, width: 2 * r * unit, height: 2 * r * unit), transform: nil) }
-// Each chevron as three points in unit space; left points left, right points right.
-func chevron(_ dir: Double) -> [CGPoint] {
-    let tip = dir * (chevGap + chevW), back = dir * chevGap
-    return [P(back, chevH), P(tip, 0), P(back, -chevH)]
-}
-func chevronPath(_ dir: Double) -> CGPath {
-    let p = CGMutablePath(); let pts = chevron(dir)
-    p.move(to: pts[0]); p.addLine(to: pts[1]); p.addLine(to: pts[2])
-    return p.copy(strokingWithWidth: chevStroke * unit, lineCap: .round, lineJoin: .round, miterLimit: 10)
+
+/// Orbit Mail: a closed envelope, its flap cut in as a V.
+func envelope(_ c: P, _ w: CGFloat, _ h: CGFloat, cut: CGFloat) -> CGPath {
+    let x0 = c.x - w / 2, y0 = c.y - h / 2
+    let v = line([P(x: x0 + w * 0.15, y: y0 + h * 0.2), P(x: c.x, y: y0 + h * 0.56), P(x: x0 + w * 0.85, y: y0 + h * 0.2)])
+    return rrect(x0, y0, w, h, h * 0.17).subtracting(stroked(v, cut))
 }
 
-let layer = CGContext(data: nil, width: L, height: L, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-layer.setShouldAntialias(true)
-let ink = CGColor(srgbRed: 0.067, green: 0.067, blue: 0.067, alpha: 1); let paper = CGColor(gray: 1, alpha: 1)
-layer.setFillColor(paper)
-layer.addPath(trailPath()); layer.fillPath()
-layer.addPath(disc(op(headT, orbitR), headR)); layer.fillPath()
-layer.addPath(chevronPath(-1)); layer.fillPath()
-layer.addPath(chevronPath(1)); layer.fillPath()
-let data = layer.data!.assumingMemoryBound(to: UInt8.self); let bpr = layer.bytesPerRow
-var minX = L, minY = L, maxX = -1, maxY = -1
-for y in 0..<L { for x in 0..<L where data[y * bpr + x * 4 + 3] > 8 { minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y) } }
-let bw = Double(maxX - minX + 1), bh = Double(maxY - minY + 1)
+/// Orbit Calendar: a page with its header band and two binder rings.
+func calendarPage(_ c: P, _ w: CGFloat, _ h: CGFloat, band: CGFloat) -> CGPath {
+    let x0 = c.x - w / 2, y0 = c.y - h / 2
+    var page = rrect(x0, y0, w, h, w * 0.16)
+    page = page.subtracting(CGPath(rect: CGRect(x: x0 - 10, y: y0 + h * 0.27, width: w + 20, height: h * band), transform: nil))
+    let tw = w * 0.115, th = h * 0.3
+    let rings = rrect(x0 + w * 0.3 - tw / 2, y0 - th * 0.42, tw, th, tw / 2).union(rrect(x0 + w * 0.7 - tw / 2, y0 - th * 0.42, tw, th, tw / 2))
+    return page.subtracting(grown(rings, w * 0.045)).union(rings)
+}
 
-if svgMode {
-    let scale = Double(args[2])!
-    let W = 1024.0
-    let tw = W * scale, th = tw * bh / bw
-    let k = tw / bw
-    let ox = (W - tw) / 2 - Double(minX) * k
-    func sx(_ p: CGPoint) -> String { String(format: "%.1f", p.x * k + ox) }
-    func sy(_ p: CGPoint) -> String { String(format: "%.1f", (W - th) / 2 + (Double(maxY) - p.y) * k) }
-    func pt(_ p: CGPoint) -> String { sx(p) + " " + sy(p) }
-    var out = ""
-    let pts = trailPoints(120)
-    var d = "M" + pt(pts.outer[0])
-    for q in pts.outer.dropFirst() { d += " L" + pt(q) }
-    let rr = String(format: "%.1f", wMax / 2 * unit * k)
-    d += " A\(rr) \(rr) 0 0 1 " + pt(pts.inner.last!)
-    for q in pts.inner.reversed().dropFirst() { d += " L" + pt(q) }
-    d += " Z"
-    let head = op(headT, orbitR)
-    out += "<path d=\"\(d)\"/>\n"
-    out += "<circle cx=\"\(sx(head))\" cy=\"\(sy(head))\" r=\"\(String(format: "%.1f", headR * unit * k))\"/>\n"
-    let sw = String(format: "%.1f", chevStroke * unit * k)
-    for dir in [-1.0, 1.0] {
-        let ch = chevron(dir)
-        out += "<path d=\"M\(pt(ch[0])) L\(pt(ch[1])) L\(pt(ch[2]))\" fill=\"none\" stroke=\"__INK__\" stroke-width=\"\(sw)\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n"
+/// Orbit Chat: a round speech bubble, its tail at the bottom right, someone typing.
+func bubble(_ c: P, _ r: CGFloat, dots: CGFloat) -> CGPath {
+    func at(_ deg: CGFloat, _ k: CGFloat) -> P { P(x: c.x + r * k * cos(deg * D), y: c.y + r * k * sin(deg * D)) }
+    let tail = CGMutablePath()
+    tail.move(to: at(84, 0.9))
+    tail.addQuadCurve(to: at(53, 1.36), control: at(68, 1.12))
+    tail.addQuadCurve(to: at(20, 0.9), control: at(44, 1.08))
+    tail.addLine(to: c)
+    tail.closeSubpath()
+    var b = disc(c, r).union(tail)
+    if dots > 0 {
+        for dx: CGFloat in [-1, 0, 1] { b = b.subtracting(disc(P(x: c.x + dx * r * 0.42, y: c.y), r * dots)) }
     }
-    print(out, terminator: "")
-    exit(0)
+    return b
 }
 
-let outPath = args[1]; let width = Int(args[2])!; let height = Int(args[3])!
-let fgName = args[4]; let bgName = args[5]; let scale = Double(args[6])!
-let fg: CGColor = fgName == "white" ? paper : ink
-let tile = bgName.hasPrefix("tile-"), mac = bgName.hasPrefix("mac-")
-let bg: CGColor? = bgName.hasSuffix("white") ? paper : (bgName.hasSuffix("black") ? ink : nil)
+/// Orbit IDE: a terminal window with its prompt and cursor.
+func terminal(_ c: P, _ w: CGFloat, _ h: CGFloat, weight: CGFloat, cursor: Bool) -> CGPath {
+    let x0 = c.x - w / 2, y0 = c.y - h / 2, k = h * 0.19
+    var win = rrect(x0, y0, w, h, h * 0.16)
+    win = win.subtracting(stroked(line([P(x: x0 + w * 0.2, y: c.y - k), P(x: x0 + w * 0.2 + k * 1.1, y: c.y), P(x: x0 + w * 0.2, y: c.y + k)]), weight))
+    if cursor { win = win.subtracting(stroked(line([P(x: c.x + w * 0.02, y: c.y + k), P(x: c.x + w * 0.24, y: c.y + k)]), weight)) }
+    return win
+}
 
-let mark = layer.makeImage()!.cropping(to: CGRect(x: minX, y: minY, width: Int(bw), height: Int(bh)))!
-let ss = 4; let W = width * ss, H = height * ss
-let big = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-big.interpolationQuality = .high
-if let bg = bg {
-    big.setFillColor(bg)
-    if tile {
-        let r = Double(min(W, H)) * 0.22
-        big.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: W, height: H), cornerWidth: r, cornerHeight: r, transform: nil)); big.fillPath()
-    } else if mac {
-        let inset = Double(W) * 100 / 1024, r = Double(W) * 185 / 1024
-        big.addPath(CGPath(roundedRect: CGRect(x: inset, y: inset, width: Double(W) - 2 * inset, height: Double(H) - 2 * inset), cornerWidth: r, cornerHeight: r, transform: nil)); big.fillPath()
+/// Orbit Mission Control: a rocket climbing to the right.
+func rocket(_ c: P, _ s: CGFloat, window: Bool) -> CGPath {
+    let bw = s * 0.38, top = c.y - s * 0.62, shoulder = c.y - s * 0.1, base = c.y + s * 0.34
+    let body = CGMutablePath()
+    body.move(to: P(x: c.x, y: top))
+    body.addCurve(to: P(x: c.x + bw / 2, y: shoulder), control1: P(x: c.x + bw * 0.42, y: top + s * 0.12), control2: P(x: c.x + bw / 2, y: shoulder - s * 0.2))
+    body.addLine(to: P(x: c.x + bw / 2, y: base - s * 0.06))
+    body.addQuadCurve(to: P(x: c.x + bw / 2 - s * 0.06, y: base), control: P(x: c.x + bw / 2, y: base))
+    body.addLine(to: P(x: c.x - bw / 2 + s * 0.06, y: base))
+    body.addQuadCurve(to: P(x: c.x - bw / 2, y: base - s * 0.06), control: P(x: c.x - bw / 2, y: base))
+    body.addLine(to: P(x: c.x - bw / 2, y: shoulder))
+    body.addCurve(to: P(x: c.x, y: top), control1: P(x: c.x - bw / 2, y: shoulder - s * 0.2), control2: P(x: c.x - bw * 0.42, y: top + s * 0.12))
+    body.closeSubpath()
+    var fins = CGMutablePath() as CGPath
+    for k: CGFloat in [-1, 1] {
+        let fin = line([P(x: c.x + k * bw * 0.3, y: c.y + s * 0.02), P(x: c.x + k * bw * 1.02, y: base + s * 0.08),
+                        P(x: c.x + k * bw * 1.02, y: base + s * 0.17), P(x: c.x + k * bw * 0.3, y: base - s * 0.02)])
+        fins = fins.union(stroked(fin, s * 0.06)).union(fin)
+    }
+    var r = fins.subtracting(grown(body, s * 0.035)).union(body)
+    if window { r = r.subtracting(disc(P(x: c.x, y: c.y - s * 0.2), bw * 0.24)) }
+    let flame = CGMutablePath()
+    flame.move(to: P(x: c.x - bw * 0.26, y: base + s * 0.05))
+    flame.addQuadCurve(to: P(x: c.x, y: base + s * 0.36), control: P(x: c.x - bw * 0.26, y: base + s * 0.24))
+    flame.addQuadCurve(to: P(x: c.x + bw * 0.26, y: base + s * 0.05), control: P(x: c.x + bw * 0.26, y: base + s * 0.24))
+    flame.closeSubpath()
+    return turned(r.union(flame), about: c, by: 38)
+}
+
+// MARK: - The marks
+
+typealias RGB = (r: CGFloat, g: CGFloat, b: CGFloat)
+func hex(_ s: String) -> RGB {
+    let v = Int(s.dropFirst(), radix: 16)!
+    return (CGFloat((v >> 16) & 255) / 255, CGFloat((v >> 8) & 255) / 255, CGFloat(v & 255) / 255)
+}
+func hexString(_ c: RGB) -> String {
+    String(format: "#%02x%02x%02x", Int((c.r * 255).rounded()), Int((c.g * 255).rounded()), Int((c.b * 255).rounded()))
+}
+
+struct Mark {
+    let label: String
+    let what: String
+    let tile: (top: RGB, bottom: RGB)   // the tile behind the white mark
+    let ink: (top: RGB, bottom: RGB)    // the bare mark: light enough for dark pages, deep enough for light ones
+    let solid: RGB                      // one flat colour, where a gradient can't go
+    let glyph: (Detail) -> CGPath
+}
+
+/// The family orbit, adjusted for one mark, at a level of detail (none at all when tiny).
+func orbit(_ detail: Detail, _ adjust: (inout Orbit) -> Void = { _ in }) -> Orbit? {
+    var o = Orbit(); adjust(&o)
+    switch detail { case .full: return o; case .small: return o.bolder(); case .tiny: return nil }
+}
+let centre = P(x: 512, y: 512)
+
+let MARKS: [String: Mark] = [
+    "ai": Mark(label: "Orbit AI", what: "a four-point spark in orbit",
+               tile: (hex("#b07cff"), hex("#5b2ee6")), ink: (hex("#a46bff"), hex("#6236f0")), solid: hex("#7c4dff")) { d in
+        orbiting(spark(centre, d == .full ? 310 : 330), orbit(d) { $0.c.y = 470 })
+    },
+    "mail": Mark(label: "Orbit Mail", what: "an envelope in orbit",
+                 tile: (hex("#45b3ff"), hex("#1f5fe8")), ink: (hex("#3fa6ff"), hex("#1f63ea")), solid: hex("#2b7ff5")) { d in
+        orbiting(envelope(centre, d == .full ? 500 : 540, d == .full ? 360 : 390, cut: d == .full ? 38 : 56), orbit(d) { $0.c.y = 500 })
+    },
+    "calendar": Mark(label: "Orbit Calendar", what: "a calendar page in orbit",
+                     tile: (hex("#ff7d6b"), hex("#e8344a")), ink: (hex("#ff6f5e"), hex("#e3344b")), solid: hex("#f04a4f")) { d in
+        orbiting(calendarPage(P(x: 512, y: 540), d == .full ? 450 : 480, d == .full ? 410 : 440, band: d == .full ? 0.065 : 0.09),
+                 orbit(d) { $0.c.y = 560 })
+    },
+    "chat": Mark(label: "Orbit Chat", what: "a speech bubble in orbit",
+                 tile: (hex("#4be38f"), hex("#0fa35a")), ink: (hex("#2fd27a"), hex("#0e9e57")), solid: hex("#16b765")) { d in
+        orbiting(bubble(P(x: 512, y: 490), d == .full ? 250 : 270, dots: d == .tiny ? 0 : (d == .full ? 0.13 : 0.16)), orbit(d) { $0.c.y = 500 })
+    },
+    "ide": Mark(label: "Orbit IDE", what: "a terminal window in orbit",
+                tile: (hex("#ffb547"), hex("#f2611d")), ink: (hex("#ffa634"), hex("#f0601c")), solid: hex("#f7801f")) { d in
+        let s: CGFloat = d == .full ? 1 : 1.08
+        return orbiting(terminal(centre, 500 * s, 390 * s, weight: d == .full ? 39 : 52, cursor: d != .tiny), orbit(d))
+    },
+    "control": Mark(label: "Orbit Mission Control", what: "a rocket in orbit",
+                    tile: (hex("#3b4fc4"), hex("#141b4d")), ink: (hex("#6f7dff"), hex("#3a45d1")), solid: hex("#3d4fd6")) { d in
+        orbiting(rocket(P(x: 512, y: 520), d == .full ? 530 : 560, window: d == .full), orbit(d) { $0.c.y = 540 })
+    },
+    "orbit": Mark(label: "Orbit", what: "a planet and its moon",
+                  tile: (hex("#1a56c9"), hex("#0b2a5b")), ink: (hex("#4a86ff"), hex("#1f56d6")), solid: hex("#1a56c9")) { d in
+        // The planet keeps its ring even at the smallest size: without it, it's a dot.
+        orbiting(disc(centre, d == .full ? 240 : 260), d == .full ? Orbit() : Orbit().bolder())
+    },
+]
+
+// MARK: - Layout
+
+enum Layout: String { case bleed, mac, tile, colour, black, white, current, dark, tinted }
+let bareLayouts: Set<Layout> = [.colour, .black, .white, .current]
+
+/// The tile behind the mark, if the layout has one, on a `w` by `h` canvas.
+func tilePath(_ l: Layout, _ w: CGFloat, _ h: CGFloat) -> CGPath? {
+    switch l {
+    case .bleed: return CGPath(rect: CGRect(x: 0, y: 0, width: w, height: h), transform: nil)
+    case .mac: return rrect(w * 100 / 1024, h * 100 / 1024, w * 824 / 1024, h * 824 / 1024, w * 185 / 1024)
+    case .tile: return rrect(0, 0, w, h, min(w, h) * 0.225)
+    default: return nil
+    }
+}
+
+/// How much of the canvas the mark spans, along whichever side binds first.
+func span(_ l: Layout, _ d: Detail) -> CGFloat {
+    switch l {
+    case .bleed, .dark, .tinted: return 0.74
+    case .mac: return 0.61
+    case .tile: return d == .full ? 0.76 : (d == .small ? 0.84 : 0.66)
+    default: return 0.98
+    }
+}
+
+/// The mark fitted, centred on its bounding box, into a `w` by `h` canvas.
+func placed(_ g: CGPath, _ w: CGFloat, _ h: CGFloat, _ fill: CGFloat) -> CGPath {
+    let b = g.boundingBoxOfPath
+    let k = min(w * fill / b.width, h * fill / b.height, min(w, h) * fill / max(b.width, b.height))
+    return moved(g, CGAffineTransform(translationX: w / 2, y: h / 2).scaledBy(x: k, y: k).translatedBy(x: -b.midX, y: -b.midY))
+}
+
+/// The bare mark's canvas height at a width: its own proportions.
+func bareHeight(_ m: Mark, _ d: Detail, width: Int) -> Int {
+    let b = m.glyph(d).boundingBoxOfPath
+    return Int((CGFloat(width) * b.height / b.width).rounded())
+}
+
+func colour(_ c: RGB) -> CGColor { CGColor(colorSpace: cs, components: [c.r, c.g, c.b, 1])! }
+
+// MARK: - PNG
+
+func renderPNG(_ m: Mark, w: Int, h: Int, layout: Layout, detail: Detail, opaque: Bool) -> CGImage {
+    let info = opaque ? CGImageAlphaInfo.noneSkipLast.rawValue : CGImageAlphaInfo.premultipliedLast.rawValue
+    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: info)!
+    let W = CGFloat(w), H = CGFloat(h)
+    ctx.translateBy(x: 0, y: H); ctx.scaleBy(x: 1, y: -1)
+    func gradient(_ pair: (top: RGB, bottom: RGB), over b: CGRect) {
+        let g = CGGradient(colorsSpace: cs, colors: [colour(pair.top), colour(pair.bottom)] as CFArray, locations: [0, 1])!
+        ctx.drawLinearGradient(g, start: P(x: b.minX + b.width * 0.25, y: b.minY), end: P(x: b.minX + b.width * 0.75, y: b.maxY),
+                               options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+    }
+    let glyph = placed(m.glyph(detail), W, H, span(layout, detail))
+    if let tile = tilePath(layout, W, H) {
+        ctx.saveGState(); ctx.addPath(tile); ctx.clip(); gradient(m.tile, over: tile.boundingBox); ctx.restoreGState()
+        ctx.addPath(glyph); ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fillPath()
+    } else if layout == .colour || layout == .dark {
+        ctx.saveGState(); ctx.addPath(glyph); ctx.clip(); gradient(m.ink, over: glyph.boundingBox); ctx.restoreGState()
     } else {
-        big.fill(CGRect(x: 0, y: 0, width: W, height: H))
+        ctx.addPath(glyph)
+        ctx.setFillColor(layout == .black ? CGColor(srgbRed: 0.067, green: 0.067, blue: 0.067, alpha: 1) : CGColor(gray: 1, alpha: 1))
+        ctx.fillPath()
     }
+    return ctx.makeImage()!
 }
-let tw = Double(W) * scale, th = tw * bh / bw
-let markRect = CGRect(x: (Double(W) - tw) / 2, y: (Double(H) - th) / 2, width: tw, height: th)
-big.saveGState()
-big.clip(to: markRect, mask: mark)
-big.setFillColor(fg)
-big.fill(markRect)
-big.restoreGState()
-let info = opaque ? CGImageAlphaInfo.noneSkipLast.rawValue : CGImageAlphaInfo.premultipliedLast.rawValue
-let out = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: info)!
-if opaque, let bg = bg { out.setFillColor(bg); out.fill(CGRect(x: 0, y: 0, width: width, height: height)) }
-out.interpolationQuality = .high; out.draw(big.makeImage()!, in: CGRect(x: 0, y: 0, width: width, height: height))
-let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: outPath) as CFURL, UTType.png.identifier as CFString, 1, nil)!
-CGImageDestinationAddImage(dest, out.makeImage()!, nil); guard CGImageDestinationFinalize(dest) else { exit(1) }
+
+func savePNG(_ img: CGImage, _ path: String) {
+    let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil)!
+    CGImageDestinationAddImage(dest, img, nil)
+    guard CGImageDestinationFinalize(dest) else { exit(1) }
+}
+
+// MARK: - SVG
+
+func num(_ v: CGFloat, _ places: Int) -> String {
+    var s = String(format: "%.\(places)f", Double(v))
+    if s.contains(".") { while s.hasSuffix("0") { s.removeLast() }; if s.hasSuffix(".") { s.removeLast() } }
+    return s == "-0" ? "0" : s
+}
+
+func pathData(_ p: CGPath, places: Int) -> String {
+    var d = ""
+    func pt(_ q: P) -> String { num(q.x, places) + " " + num(q.y, places) }
+    p.applyWithBlock { e in
+        let q = e.pointee.points
+        switch e.pointee.type {
+        case .moveToPoint: d += "M" + pt(q[0])
+        case .addLineToPoint: d += "L" + pt(q[0])
+        case .addQuadCurveToPoint: d += "Q" + pt(q[0]) + " " + pt(q[1])
+        case .addCurveToPoint: d += "C" + pt(q[0]) + " " + pt(q[1]) + " " + pt(q[2])
+        case .closeSubpath: d += "Z"
+        @unknown default: break
+        }
+    }
+    return d
+}
+
+func svgGradient(_ id: String, _ pair: (top: RGB, bottom: RGB)) -> String {
+    "<defs><linearGradient id=\"\(id)\" x1=\"0.25\" y1=\"0\" x2=\"0.75\" y2=\"1\">"
+        + "<stop offset=\"0\" stop-color=\"\(hexString(pair.top))\"/><stop offset=\"1\" stop-color=\"\(hexString(pair.bottom))\"/>"
+        + "</linearGradient></defs>"
+}
+
+func svgDocument(_ key: String, _ m: Mark, layout: Layout, w: Int, h: Int, detail: Detail) -> String {
+    // Drawn in a 1024-unit box along the width, whatever size it is shown at.
+    let W: CGFloat = 1024, H = (1024 * CGFloat(h) / CGFloat(w)).rounded()
+    let d = pathData(placed(m.glyph(detail), W, H, span(layout, detail)), places: 1)
+    var body = ""
+    switch layout {
+    case .bleed, .mac, .tile:
+        let id = "orbit-\(key)-tile"
+        body += svgGradient(id, m.tile)
+        switch layout {
+        case .bleed: body += "<rect width=\"\(num(W, 1))\" height=\"\(num(H, 1))\" fill=\"url(#\(id))\"/>"
+        case .mac: body += "<rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#\(id))\"/>"
+        default: body += "<rect width=\"\(num(W, 1))\" height=\"\(num(H, 1))\" rx=\"\(num(min(W, H) * 0.225, 1))\" fill=\"url(#\(id))\"/>"
+        }
+        body += "<path fill=\"#fff\" d=\"\(d)\"/>"
+    case .colour:
+        let id = "orbit-\(key)-ink"
+        body += svgGradient(id, m.ink) + "<path fill=\"url(#\(id))\" d=\"\(d)\"/>"
+    default:
+        body += "<path fill=\"\(layout == .white ? "#fff" : (layout == .black ? "#000" : "currentColor"))\" d=\"\(d)\"/>"
+    }
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 \(num(W, 1)) \(num(H, 1))\" width=\"\(w)\" height=\"\(h)\" role=\"img\" aria-label=\"\(m.label)\">\n"
+        + "<!-- \(m.label): \(m.what). Generated from scripts/orbitmark.swift; edit that, not this. -->\n"
+        + body + "\n</svg>\n"
+}
+
+// MARK: - Command line
+
+func size(_ s: String) -> (Int, Int?) {
+    let parts = s.split(separator: "x").map { Int($0)! }
+    return (parts[0], parts.count > 1 ? parts[1] : nil)
+}
+
+let a = CommandLine.arguments
+guard a.count >= 3, let m = MARKS[a[2]] else {
+    FileHandle.standardError.write("usage: orbitmark png|svg|path|colour <mark> ... (see the top of orbitmark.swift)\n".data(using: .utf8)!)
+    exit(2)
+}
+let detail: Detail = a.contains("tiny") ? .tiny : (a.contains("small") ? .small : .full)
+switch a[1] {
+case "png":
+    let layout = Layout(rawValue: a[5])!
+    let (w, h) = size(a[4])
+    savePNG(renderPNG(m, w: w, h: h ?? (bareLayouts.contains(layout) ? bareHeight(m, detail, width: w) : w),
+                      layout: layout, detail: detail, opaque: a.contains("opaque")), a[3])
+case "svg":
+    let layout = Layout(rawValue: a[3])!
+    let (w, h) = size(a[4])
+    print(svgDocument(a[2], m, layout: layout, w: w, h: h ?? (bareLayouts.contains(layout) ? bareHeight(m, detail, width: w) : w), detail: detail),
+          terminator: "")
+case "path":
+    let box = CGFloat(Double(a[3])!), fill = CGFloat(Double(a[4])!)
+    print(pathData(placed(m.glyph(detail), box, box, fill), places: 2))
+case "colour":
+    print(hexString(m.solid))
+default:
+    exit(2)
+}

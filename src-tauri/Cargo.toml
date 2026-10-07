@@ -18,6 +18,8 @@ base64 = "0.22"
 ureq = { version = "2", default-features = false, features = ["json", "native-tls", "gzip"] }
 native-tls = "0.2"
 notify = "8"
+# Updates from Orbit Mission Control (src/updates.rs).
+tauri-plugin-updater = "2"
 
 # Move to Trash: Finder's own call on the Mac, the Recycle Bin on Windows.
 # Both crates already come with Tauri.

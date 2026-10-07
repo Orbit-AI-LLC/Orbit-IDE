@@ -1,5 +1,17 @@
 name: Build and release
 
+# Every push to main builds the Mac and Windows apps and publishes them as a
+# pre-release tagged v<version>-build.<run number>; a v* tag publishes a
+# release. Pull requests build without publishing.
+#
+# Installed copies update themselves through Orbit Mission Control, which
+# offers a release once it carries orbit-update.json with a signature for each
+# update bundle. The signatures need the updater key, whose public half is in
+# src-tauri/tauri.conf.json (plugins > updater > pubkey):
+#   TAURI_SIGNING_PRIVATE_KEY           the private key (`tauri signer generate`)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+# Without them the apps are built and released as before, but not offered as updates.
+
 on:
   push:
     branches: [main]
@@ -11,8 +23,45 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build: ${{ steps.meta.outputs.build }}
+      tag: ${{ steps.meta.outputs.tag }}
+      name: ${{ steps.meta.outputs.name }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version stamped into the apps is the release's tag without the v,
+      # so what an app reports is what Mission Control finds on GitHub.
+      - name: Name the build
+        id: meta
+        run: |
+          base=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "name=Orbit IDE $version" >> "$GITHUB_OUTPUT"
+          else
+            version="${base}-build.${GITHUB_RUN_NUMBER}"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "name=Orbit IDE ${base} build ${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$version is not a semantic version; tag releases like v0.2.0."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Building Orbit IDE $version (build $GITHUB_RUN_NUMBER)"
+
   build:
     name: ${{ matrix.name }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +71,11 @@ jobs:
           - os: windows-latest
             name: Windows
     runs-on: ${{ matrix.os }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Compiled in for the update check (src-tauri/src/updates.rs).
+      ORBIT_BUILD: ${{ needs.version.outputs.build }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,21 +96,39 @@ jobs:
           npm ci
           sh scripts/vendor.sh
 
+      - name: Stamp the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then updater=true; else
+            updater=false
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: the build is not signed for updates, so installed apps won't be offered it."
+          fi
+          echo "TAURI_RELEASE_CONFIG={\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":$updater}}" >> "$GITHUB_ENV"
+
       - name: Build macOS app and DMG
         if: runner.os == 'macOS'
         run: |
-          sh build_orbit_ide_dmg.sh
+          sh build_orbit_ide_dmg.sh --config "$TAURI_RELEASE_CONFIG"
           cd "src-tauri/target/release/bundle/macos"
           ditto -c -k --keepParent "Orbit IDE.app" "$GITHUB_WORKSPACE/dist/Orbit-IDE-macOS.app.zip"
+          if [ -f "Orbit IDE.app.tar.gz.sig" ]; then
+            cp "Orbit IDE.app.tar.gz" "$GITHUB_WORKSPACE/dist/Orbit-IDE-macOS.app.tar.gz"
+            cp "Orbit IDE.app.tar.gz.sig" "$GITHUB_WORKSPACE/dist/Orbit-IDE-macOS.app.tar.gz.sig"
+          fi
 
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          npx --no-install tauri build --bundles nsis
+          npx --no-install tauri build --bundles nsis --config "$TAURI_RELEASE_CONFIG"
           mkdir -p dist
           cp src-tauri/target/release/bundle/nsis/*-setup.exe dist/Orbit-IDE-Windows-Setup.exe
           cp "src-tauri/target/release/orbit-ide.exe" dist/Orbit-IDE-Windows-portable.exe
+          for sig in src-tauri/target/release/bundle/nsis/*-setup.exe.sig; do
+            if [ -f "$sig" ]; then cp "$sig" dist/Orbit-IDE-Windows-Setup.exe.sig; fi
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -66,7 +138,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [version, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -77,26 +149,21 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Name the release
-        id: meta
+      # Folds the update signatures into orbit-update.json, which Mission
+      # Control reads to offer this release to installed apps.
+      - name: Write the update manifest
         run: |
-          version=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "name=Orbit IDE ${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v${version}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-            echo "name=Orbit IDE ${version} build ${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          fi
+          python3 .github/scripts/orbit_update_manifest.py artifacts \
+            --version "${{ needs.version.outputs.version }}" \
+            --build "${{ needs.version.outputs.build }}" \
+            --commit "$GITHUB_SHA"
           ls -la artifacts
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.name }}
-          prerelease: ${{ steps.meta.outputs.prerelease }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.name }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: artifacts/*

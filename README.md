@@ -89,7 +89,38 @@ sh build_orbit_ide_dmg.sh
 
 This produces `src-tauri/target/release/bundle/macos/Orbit IDE.app` and
 `dist/OrbitIDE.dmg`. The app is ad-hoc signed; the first launch may need a
-right-click, Open.
+right-click, Open. Arguments after the script go to `tauri build`, which is
+how the release workflow stamps the version.
+
+## Updates
+
+Orbit IDE keeps itself up to date through Orbit Mission Control. Half a
+minute after launch and every four hours after that it asks
+`https://control.orbit.com.ai/api/updates/orbit-ide/<target>/<arch>/<version>?build=<n>`,
+and Mission Control answers from this repository's GitHub releases with the
+newest build, or nothing. **Check for Updates…** in the Orbit IDE menu on the
+Mac asks straight away.
+
+A newer build is downloaded in the background and checked against the public
+key in `src-tauri/tauri.conf.json` (`plugins > updater > pubkey`); the
+signature must also name the version Mission Control announced. Then the app
+asks to restart. On the Mac, **Later** installs it when Orbit IDE quits (unless
+the app sits in a folder that needs a password, in which case it asks again at
+the next launch). On Windows the installer closes the app, so it only runs when
+you choose **Restart Now**, after the terminals are closed.
+
+Builds are ordered by their build number, the release workflow's run number,
+which CI compiles in as `ORBIT_BUILD`. A local build has none and is compared
+by version, so it is only offered something with a higher version. Debug
+builds don't check unless pointed at a Mission Control:
+
+```sh
+ORBIT_UPDATES_URL=http://127.0.0.1:8001 sh run.sh
+```
+
+Which builds are offered (every build from `main`, or tagged releases only)
+and pausing updates after a bad build are set in Mission Control under
+**Updates › Desktop apps**.
 
 ## Layout of the repository
 
@@ -103,7 +134,9 @@ src-tauri/src/      the native side
   git.rs            git through the git command
   pty.rs            pseudo-terminals for shells and agents
   ai.rs             one-shot completions through the CLIs, OpenRouter chat
+  updates.rs        updates from Orbit Mission Control
 scripts/            vendor.sh, the icon renderer and builder
+.github/            the build and release workflow, and the update manifest script
 ```
 
 ## Icon
@@ -121,8 +154,29 @@ tagged `v<version>-build.<run number>` (marked as a pre-release) with:
 * `OrbitIDE.dmg` and `Orbit-IDE-macOS.app.zip` for the Mac
 * `Orbit-IDE-Windows-Setup.exe` (installer) and
   `Orbit-IDE-Windows-portable.exe` for Windows
+* `Orbit-IDE-macOS.app.tar.gz`, the Mac update bundle, and
+  `orbit-update.json`, which names the version and build and carries the
+  signature of each update bundle (the Windows installer doubles as its own).
+  Mission Control offers a release to installed apps only once it has this
+  file.
 
-Pushing a tag such as `v0.2.0` publishes a full release under that tag.
+Pushing a tag such as `v0.2.0` publishes a full release under that tag. The
+version stamped into each build is its tag without the `v`
+(`0.1.0-build.13`, `0.2.0`), set with `tauri build --config`; raise
+`version` in `tauri.conf.json` and `Cargo.toml` to move the base.
+
+The update signatures need two repository secrets, the key whose public
+half is in `tauri.conf.json`:
+
+* `TAURI_SIGNING_PRIVATE_KEY`: the private key, as written by
+  `npx tauri signer generate`
+* `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password
+
+Without them the apps still build and publish, with a warning, but installed
+copies are not offered them. Replacing the key means changing `pubkey` too,
+and copies built with the old key can't verify updates signed with the new
+one: they need one manual install.
+
 The Mac build is ad-hoc signed and not notarized; the Windows build is
 unsigned. Add signing secrets to the workflow for signed builds.
 

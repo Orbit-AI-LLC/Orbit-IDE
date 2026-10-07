@@ -2,8 +2,8 @@
 //!
 //! The page in `ui/` is the editor, the project, file and git sidebars and the
 //! AI dock. This side owns what a web page cannot: the filesystem, git,
-//! pseudo-terminals for the agent CLIs, the settings file and the OpenRouter
-//! connection.
+//! pseudo-terminals for the agent CLIs, the settings file, the OpenRouter
+//! connection and updates from Orbit Mission Control.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -13,6 +13,7 @@ mod git;
 mod pty;
 mod settings;
 mod shell;
+mod updates;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, RunEvent, State};
@@ -333,6 +334,8 @@ fn main() {
     install_panic_log();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::Updates::default())
         .manage(pty::PtyState::default())
         .manage(fsops::WatchState::default())
         .manage(ai::ChatState::default())
@@ -381,11 +384,15 @@ fn main() {
             ai_openrouter_chat,
             ai_cancel,
         ])
-        .setup(|_app| {
+        .setup(|app| {
             // Warm the login PATH off the main thread so the first terminal is quick.
             std::thread::spawn(|| {
                 let _ = shell::login_path();
             });
+            #[cfg(target_os = "macos")]
+            updates::menu(app.handle())?;
+            // The Windows installer closes the app itself; the terminals go first.
+            updates::start(app.handle(), |app| pty::kill_all(&app.state::<pty::PtyState>()));
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -394,6 +401,7 @@ fn main() {
     app.run(|app, event| {
         if let RunEvent::Exit = event {
             pty::kill_all(&app.state::<pty::PtyState>());
+            updates::install_on_quit(app);
         }
     });
 }
