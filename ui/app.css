@@ -205,8 +205,18 @@ kbd { font: 11px var(--mono); background: var(--bg-raised); border: 1px solid va
 
 /* Search */
 .search-box { padding: 0 12px 8px; }
-.search-box input { width: 100%; }
-.search-file { padding: 6px 14px 2px; font-size: 11.5px; font-weight: 600; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-box { display: flex; flex-direction: column; gap: 6px; }
+.search-row { display: flex; align-items: center; gap: 4px; }
+.search-row input { flex: 1; min-width: 0; }
+.search-row .btn { height: 28px; padding: 0 9px; font-size: 11.5px; }
+.search-opt { width: 26px; height: 26px; border-radius: 5px; font: 600 11.5px var(--mono); color: var(--text-faint); border: 1px solid transparent; }
+.search-opt:hover { background: var(--bg-hover); color: var(--text); }
+.search-opt[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--bg-active); }
+.search-file .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.search-file .replace-file { visibility: hidden; font-weight: 500; color: var(--text-dim); padding: 0 6px; border-radius: 4px; }
+.search-file:hover .replace-file { visibility: visible; }
+.search-file .replace-file:hover { background: var(--bg-hover); color: var(--text); }
+.search-file { display: flex; align-items: center; gap: 6px; padding: 6px 14px 2px; font-size: 11.5px; font-weight: 600; color: var(--text-dim); white-space: nowrap; overflow: hidden; }
 .search-hit { display: flex; gap: 8px; padding: 2px 14px 2px 22px; font: 11.5px var(--mono); white-space: nowrap; overflow: hidden; }
 .search-hit:hover { background: var(--bg-hover); }
 .search-hit .ln { color: var(--text-faint); min-width: 32px; text-align: right; }

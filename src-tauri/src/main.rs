@@ -9,12 +9,14 @@
 
 mod ai;
 mod fsops;
+mod lsp;
 mod git;
 mod pty;
 mod settings;
 mod shell;
 mod updates;
 
+use std::collections::HashMap;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
@@ -151,8 +153,36 @@ async fn fs_walk(root: String) -> Res<Vec<String>> {
 }
 
 #[tauri::command]
-async fn fs_search(root: String, query: String) -> Res<Vec<fsops::Hit>> {
-    blocking(move || fsops::search(&root, &query, 500)).await
+async fn fs_search(root: String, query: String, options: Option<fsops::FindOptions>, unsaved: Option<HashMap<String, String>>) -> Res<Vec<fsops::Hit>> {
+    blocking(move || fsops::search(&root, &query, options.unwrap_or_default(), &unsaved.unwrap_or_default(), 500)).await
+}
+
+#[tauri::command]
+async fn fs_replace(request: fsops::ReplaceRequest) -> Res<fsops::Replaced> {
+    blocking(move || fsops::replace(request)).await
+}
+
+// ---- language servers ------------------------------------------------------
+
+#[tauri::command]
+async fn lsp_servers() -> Res<Vec<lsp::Server>> {
+    blocking(|| Ok(lsp::servers())).await
+}
+
+#[tauri::command]
+async fn lsp_start(app: AppHandle, state: State<'_, lsp::LspState>, root: String, program: String) -> Res<u64> {
+    lsp::start(&app, &state, &root, &program)
+}
+
+#[tauri::command]
+async fn lsp_send(state: State<'_, lsp::LspState>, id: u64, body: String) -> Res<()> {
+    lsp::send(&state, id, &body)
+}
+
+#[tauri::command]
+async fn lsp_stop(state: State<'_, lsp::LspState>, id: u64) -> Res<()> {
+    lsp::stop(&state, id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -362,6 +392,7 @@ fn main() {
         .manage(updates::Updates::default())
         .manage(pty::PtyState::default())
         .manage(fsops::WatchState::default())
+        .manage(lsp::LspState::default())
         .manage(ai::ChatState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -381,6 +412,11 @@ fn main() {
             open_external,
             fs_walk,
             fs_search,
+            fs_replace,
+            lsp_servers,
+            lsp_start,
+            lsp_send,
+            lsp_stop,
             fs_watch,
             git_status,
             git_stage,
@@ -417,7 +453,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             mac_menu(app.handle())?;
             // The Windows installer closes the app itself; the terminals go first.
-            updates::start(app.handle(), |app| pty::kill_all(&app.state::<pty::PtyState>()));
+            updates::start(app.handle(), |app| {
+                pty::kill_all(&app.state::<pty::PtyState>());
+                lsp::stop_all(&app.state::<lsp::LspState>());
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -426,6 +465,7 @@ fn main() {
     app.run(|app, event| {
         if let RunEvent::Exit = event {
             pty::kill_all(&app.state::<pty::PtyState>());
+            lsp::stop_all(&app.state::<lsp::LspState>());
             updates::install_on_quit(app);
         }
     });

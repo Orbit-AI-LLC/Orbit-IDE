@@ -2,6 +2,7 @@
 import { api } from "./api.js";
 import { state, saveSettings, refreshProviders, commitInstructions } from "./state.js";
 import { $, el, showModal, toast, formatError } from "./ui.js";
+import { installedServers } from "./lsp.js";
 
 let modal = null;
 
@@ -36,6 +37,10 @@ export function openSettings(page = "general") {
       field("Tab size", bind("tab_size", el("input", { type: "number", min: "1", max: "8" }), { number: true })),
     ]),
     el("div", { class: "field" }, [el("label", {}, [bind("word_wrap", el("input", { type: "checkbox" }), { bool: true }), " Wrap long lines"])]),
+    el("div", { class: "field" }, [
+      el("label", {}, [bind("language_servers", el("input", { type: "checkbox" }), { bool: true }), " Language servers"]),
+      el("div", { class: "hint", text: `Errors and warnings as you type, hover, and Go to Definition (F12, or Cmd+click), from the language servers installed on this computer: rust-analyzer, typescript-language-server, Pyright or pylsp, gopls and clangd. ${installedServers().length ? `Found: ${installedServers().join(", ")}.` : "None found on the PATH."}` }),
+    ]),
   ]);
 
   // Providers

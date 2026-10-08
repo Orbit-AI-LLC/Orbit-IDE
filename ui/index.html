@@ -67,7 +67,17 @@
         </section>
         <section class="panel" data-panel="search">
           <header class="panel-header"><h2>Search</h2></header>
-          <div class="search-box"><input type="search" id="search-input" placeholder="Find in project" spellcheck="false"></div>
+          <div class="search-box">
+            <div class="search-row">
+              <input type="search" id="search-input" placeholder="Find in project" spellcheck="false">
+              <button class="search-opt" id="search-case" title="Match case" aria-pressed="false">Aa</button>
+              <button class="search-opt" id="search-regex" title="Regular expression" aria-pressed="false">.*</button>
+            </div>
+            <div class="search-row">
+              <input type="text" id="replace-input" placeholder="Replace" spellcheck="false">
+              <button class="btn" id="btn-replace-all" title="Replace every match in the project">Replace all</button>
+            </div>
+          </div>
           <div class="panel-body" id="search-results"></div>
         </section>
       </aside>

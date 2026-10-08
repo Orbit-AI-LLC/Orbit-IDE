@@ -30,8 +30,14 @@ export const api = {
   reveal: (path) => invoke("fs_reveal", { path }),
   openExternal: (target) => invoke("open_external", { target }),
   walk: (root) => invoke("fs_walk", { root }),
-  search: (root, query) => invoke("fs_search", { root, query }),
+  search: (root, query, options, unsaved) => invoke("fs_search", { root, query, options, unsaved }),
+  replace: (request) => invoke("fs_replace", { request }),
   watch: (root) => invoke("fs_watch", { root }),
+
+  lspServers: () => invoke("lsp_servers"),
+  lspStart: (root, program) => invoke("lsp_start", { root, program }),
+  lspSend: (id, body) => invoke("lsp_send", { id, body }),
+  lspStop: (id) => invoke("lsp_stop", { id }),
 
   gitStatus: (repo) => invoke("git_status", { repo }),
   gitStage: (repo, paths) => invoke("git_stage", { repo, paths }),

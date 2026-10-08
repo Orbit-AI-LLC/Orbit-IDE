@@ -19,11 +19,20 @@ Nothing leaves your computer except what you send to the provider you choose.
   shows by the name of the folder you picked. Removing a project with unsaved
   files asks first: save them, throw them away, or cancel.
 * **Explorer** (second tab): the file tree with git status colours, create,
-  rename, trash, reveal in Finder. `Cmd+P` jumps to any file; `Cmd+Shift+F`
-  searches text across the project. Move to Trash uses the system Trash, on
-  another disk that disk's own Trash, so Put Back works. When an item can't
-  go to the Trash, it stays where it is and you get an error; Orbit IDE never
-  deletes it outright.
+  rename, trash, reveal in Finder. `Cmd+P` jumps to any file. Move to Trash
+  uses the system Trash, on another disk that disk's own Trash, so Put Back
+  works. When an item can't go to the Trash, it stays where it is and you get
+  an error; Orbit IDE never deletes it outright.
+* **Search** (`Cmd+Shift+F`): text across the project, in any case unless
+  *Match case* (Aa) is on, or as a regular expression (.*). `Cmd+Shift+H`
+  goes to the Replace box: **Replace all** says how many matches in how many
+  files first, and each file in the results has its own Replace. With a
+  regular expression, `$1` or `${name}` puts in what a group matched. Files
+  open with unsaved changes are searched and replaced as the editor has them,
+  in one step Undo takes back, and stay unsaved; the rest are written, and
+  open ones reload. Generated folders (`node_modules`, `target`, `dist`,
+  `build` and the like), `.git`, binary files, files over 2 MB and symlinks
+  are left out, and a file that isn't UTF-8 text is never rewritten.
 * **Source control** (third tab): branch switch and create, fetch, pull and
   push, staged and unstaged lists with added and removed line counts, diffs
   side by side, discard, commit, commit and push, amend. The **Generate**
@@ -33,6 +42,16 @@ Nothing leaves your computer except what you send to the provider you choose.
   Settings, under Commit messages.
 * **Editor**: Monaco (the engine inside VS Code), bundled, with themes for
   dark and light.
+* **Language servers**: the ones already installed on the computer, found on
+  the login PATH: rust-analyzer, typescript-language-server, Pyright (or
+  basedpyright, or pylsp), gopls and clangd. One starts per project when a file
+  it reads opens, and gives errors and warnings as you type, hover, and Go to
+  Definition (F12, or Cmd+click) into other files. The status bar names the
+  server reading the file, or says why it didn't start (rustup's
+  `rust-analyzer` needs `rustup component add rust-analyzer` first). With
+  typescript-language-server, Monaco's own TypeScript checks step aside.
+  Settings › General turns them off. Servers keep their own caches (clangd's
+  is `.cache/clangd` in the project).
 * **Terminal** (`Cmd+J`): login shells in the project folder.
 * **AI dock** (`Cmd+Shift+A`), one tab per provider:
   * Claude, Codex and Grok each run in a terminal in the project folder,
@@ -133,7 +152,8 @@ src-tauri/src/      the native side
   main.rs           commands the page can call
   shell.rs          the login PATH every subprocess and terminal gets
   settings.rs       settings file (app data folder, owner-readable only)
-  fsops.rs          files, search, quick-open listing, change watcher
+  fsops.rs          files, search and replace, quick-open listing, change watcher
+  lsp.rs            language servers: finding, starting, passing messages
   git.rs            git through the git command
   pty.rs            pseudo-terminals for shells and agents
   ai.rs             one-shot completions through the CLIs, OpenRouter chat

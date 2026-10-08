@@ -186,6 +186,9 @@ export async function openFile(path, { line, column, preview = false } = {}) {
     // A model already at this path belongs to another tab: the file open in a
     // nested project, or a tab renamed away from this path. Never take it over.
     let uri = monaco.Uri.file(path);
+    // A model Go to Definition loaded gives way to the tab's own.
+    const loaded = monaco.editor.getModel(uri);
+    if (loaded && loose.delete(loaded)) loaded.dispose();
     if (monaco.editor.getModel(uri)) uri = uri.with({ fragment: String(nextTabId) });
     const model = monaco.editor.createModel(file.content, undefined, uri);
     tab = { id: nextTabId++, kind: "file", path, title: basename(path), model, viewState: null, savedVersion: model.getAlternativeVersionId(), dirty: false, external: false, disk: textHash(file.content) };
@@ -194,6 +197,7 @@ export async function openFile(path, { line, column, preview = false } = {}) {
       if (dirty !== tab.dirty) { tab.dirty = dirty; renderTabs(); emit("dirty", countDirty()); }
     });
     v.tabs.push(tab);
+    emit("file-opened", { project: v.path, tab });
   }
   activateTab(tab.id);
   if (line) {
@@ -349,6 +353,24 @@ export async function closeAllTabs(projectPath) {
 }
 
 /// The file tabs of a project with unsaved changes.
+/// Models for files no tab shows, loaded so Go to Definition can preview and
+/// reach them (lsp.js). A tab that opens the file replaces its model; the
+/// rest go after ten minutes.
+const loose = new Set();
+
+export async function looseModel(path) {
+  const uri = monaco.Uri.file(path);
+  if (monaco.editor.getModel(uri)) return monaco.editor.getModel(uri);
+  let file;
+  try { file = await api.read(path); } catch { return null; }
+  if (file.binary) return null;
+  if (monaco.editor.getModel(uri)) return monaco.editor.getModel(uri);
+  const model = monaco.editor.createModel(file.content, undefined, uri);
+  loose.add(model);
+  setTimeout(() => { if (loose.delete(model)) model.dispose(); }, 10 * 60000);
+  return model;
+}
+
 export function dirtyTabs(projectPath) {
   const v = state.views.get(projectPath);
   return v ? v.tabs.filter((t) => t.kind === "file" && t.dirty) : [];
@@ -420,6 +442,19 @@ export async function fileChangedOnDisk(path) {
     }
   }
   renderTabs();
+}
+
+/// A replace across the project changed a file open with unsaved edits: put
+/// the new text in its editor as one edit, so Undo takes it back and the file
+/// stays unsaved.
+export function replaceUnsaved(projectPath, path, text) {
+  const v = state.views.get(projectPath);
+  const tab = v && v.tabs.find((t) => t.kind === "file" && t.path === path);
+  if (!tab) return;
+  // Its own undo step, apart from whatever was typed just before.
+  tab.model.pushStackElement();
+  tab.model.pushEditOperations([], [{ range: tab.model.getFullModelRange(), text }], () => null);
+  tab.model.pushStackElement();
 }
 
 /// Every file open in a tab, in any project.

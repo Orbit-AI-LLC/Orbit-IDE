@@ -2,12 +2,13 @@
 import { api, listen, onDragDrop, onDragEnter, onDragLeave } from "./api.js";
 import { state, view, loadSettings, saveSettings, refreshProviders, emit, on, projectName } from "./state.js";
 import { $, $$, el, basename, dirname, relPath, toast, formatError, showModal, isModalOpen, confirmDialog, choiceDialog, debounce } from "./ui.js";
-import { initEditor, openFile, saveActive, saveAll, closeTab, switchProjectView, fileChangedOnDisk, fileRemoved, countDirty, layout, focusEditor, applyTheme, closeAllTabs, dirtyTabs, saveTabs, openFilePaths, recheckFiles } from "./editor.js";
+import { initEditor, openFile, saveActive, saveAll, closeTab, switchProjectView, fileChangedOnDisk, fileRemoved, countDirty, layout, focusEditor, applyTheme, closeAllTabs, dirtyTabs, saveTabs, openFilePaths, recheckFiles, replaceUnsaved } from "./editor.js";
 import { initTerminals, toggleTerminalPanel, isTerminalPanelOpen, newShell, switchProjectTerminals } from "./terminal.js";
 import { initExplorer, renderTree, refreshTree, invalidate, renderProjects, revealInTree } from "./explorer.js";
 import { initGit, refreshGit, refreshGitSoon, showGit, startBackgroundGit } from "./gitpanel.js";
 import { initAiPanel, toggleAiDock, isAiDockOpen, renderAll as renderAi } from "./aipanel.js";
 import { openSettings } from "./settings.js";
+import { initLanguageServers } from "./lsp.js";
 
 async function boot() {
   await loadSettings();
@@ -16,6 +17,7 @@ async function boot() {
   applyTheme(state.settings.theme);
   applySizes();
   await initEditor();
+  initLanguageServers().catch((err) => console.error("language servers", err));
   initTerminals();
   initExplorer();
   initGit();
@@ -297,8 +299,13 @@ function bindChrome() {
   $("#btn-toggle-ai").classList.add("active");
   $("#gutter-terminal").hidden = true;
   const searchInput = $("#search-input");
-  searchInput.addEventListener("input", debounce(() => runSearch(searchInput.value), 250));
-  searchInput.addEventListener("keydown", (event) => { if (event.key === "Enter") runSearch(searchInput.value); });
+  searchInput.addEventListener("input", debounce(() => runSearch(), 250));
+  searchInput.addEventListener("keydown", (event) => { if (event.key === "Enter") runSearch(); });
+  for (const option of [$("#search-case"), $("#search-regex")]) {
+    option.addEventListener("click", () => { option.setAttribute("aria-pressed", String(option.getAttribute("aria-pressed") !== "true")); runSearch(); });
+  }
+  $("#replace-input").addEventListener("keydown", (event) => { if (event.key === "Enter") replaceInProject(); });
+  $("#btn-replace-all").addEventListener("click", () => replaceInProject());
   $("#projects-empty").addEventListener("click", pickProject);
   document.addEventListener("click", (event) => {
     const link = event.target.closest("a[href^='http']");
@@ -325,6 +332,7 @@ function bindShortcuts() {
     if (key === "s" && shift) return handled(saveAll);
     if (key === "p" && !shift) return handled(quickOpen);
     if (key === "f" && shift) return handled(() => showPanel("search"));
+    if (key === "h" && shift) return handled(() => { showPanel("search"); setTimeout(() => $("#replace-input").focus(), 0); });
     if (key === "b" && !shift) return handled(toggleSidebar);
     if (key === "j" && !shift) return handled(() => toggleTerminalPanel());
     if (key === "`" ) return handled(() => toggleTerminalPanel());
@@ -490,23 +498,77 @@ function highlight(name, q) {
   return esc(name.slice(0, idx)) + "<mark>" + esc(name.slice(idx, idx + q.length)) + "</mark>" + esc(name.slice(idx + q.length));
 }
 
-// ---- search in project ------------------------------------------------------------
+// ---- search and replace in the project -------------------------------------------
 
-async function runSearch(query) {
+const SEARCH_LIMIT = 500; // fsops::search's, from fs_search
+let searchRun = 0;
+
+function searchOptions() {
+  return { case: $("#search-case").getAttribute("aria-pressed") === "true", regex: $("#search-regex").getAttribute("aria-pressed") === "true" };
+}
+
+const count = (n, one, many = one + "s") => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+/// Files open with unsaved changes, as the editor has them, by path below
+/// the project: search and replace read these instead of the copy on disk.
+function unsavedText(v) {
+  return Object.fromEntries(dirtyTabs(v.path).map((tab) => [relPath(v.path, tab.path), tab.model.getValue()]));
+}
+
+async function runSearch(query = $("#search-input").value) {
   const v = view();
   const host = $("#search-results");
-  host.innerHTML = "";
-  if (!v || !query.trim()) return;
+  const run = ++searchRun;
+  if (!v || !query) { host.innerHTML = ""; return; }
   let hits;
-  try { hits = await api.search(v.path, query); } catch (err) { host.append(el("div", { class: "panel-hint", text: formatError(err) })); return; }
+  try { hits = await api.search(v.path, query, searchOptions(), unsavedText(v)); } catch (err) {
+    if (run === searchRun) host.replaceChildren(el("div", { class: "panel-hint", text: formatError(err) }));
+    return;
+  }
+  // Typing runs searches one after another; only the last one shows.
+  if (run !== searchRun) return;
+  host.innerHTML = "";
   if (!hits.length) { host.append(el("div", { class: "panel-hint", text: "No results" })); return; }
   let lastFile = null;
   for (const hit of hits) {
-    if (hit.path !== lastFile) { host.append(el("div", { class: "search-file", text: hit.path, title: hit.path })); lastFile = hit.path; }
+    if (hit.path !== lastFile) {
+      const replaceFile = el("button", { class: "replace-file", text: "Replace", title: `Replace the matches in ${hit.path}` });
+      replaceFile.addEventListener("click", () => replaceInProject(hit.path));
+      host.append(el("div", { class: "search-file", title: hit.path }, [el("span", { class: "name", text: hit.path }), replaceFile]));
+      lastFile = hit.path;
+    }
     const row = el("div", { class: "search-hit" }, [el("span", { class: "ln", text: hit.line }), el("span", { class: "tx", text: hit.text })]);
     row.addEventListener("click", () => openFile(v.path + "/" + hit.path, { line: hit.line }));
     host.append(row);
   }
+  if (hits.length >= SEARCH_LIMIT) host.append(el("div", { class: "panel-hint", text: `Showing the first ${SEARCH_LIMIT} matching lines. Replace all changes every match.` }));
+}
+
+/// Replace every match in the project, or in the one file `only`, after
+/// saying how many. Files open with unsaved edits are changed in the editor
+/// (Undo takes it back) and stay unsaved; the rest are written, and open
+/// ones reload.
+async function replaceInProject(only = null) {
+  const v = view();
+  const query = $("#search-input").value;
+  if (!v || !query) { $("#search-input").focus(); return; }
+  const replacement = $("#replace-input").value;
+  const request = { root: v.path, query, replacement, options: searchOptions(), only: only ? [only] : null };
+  let counted;
+  try { counted = await api.replace({ ...request, unsaved: unsavedText(v), dryRun: true }); } catch (err) { toast(formatError(err), "error"); return; }
+  const leftAlone = counted.skipped.length ? ` ${count(counted.skipped.length, "file")} that isn't UTF-8 text ${counted.skipped.length === 1 ? "is" : "are"} left alone.` : "";
+  if (!counted.replacements) { toast(leftAlone ? `Nothing to replace.${leftAlone}` : "Nothing to replace."); return; }
+  const where = only ? only : count(counted.files.length, "file");
+  const into = replacement ? `with “${replacement}”` : "with nothing";
+  const inEditor = Object.keys(counted.unsaved).length ? " Files with unsaved changes are changed in the editor and stay unsaved." : "";
+  if (!(await confirmDialog("Replace", `Replace ${count(counted.replacements, "match", "matches")} in ${where} ${into}?${inEditor}${leftAlone}`, { ok: "Replace" }))) return;
+  let done;
+  try { done = await api.replace({ ...request, unsaved: unsavedText(v), dryRun: false }); } catch (err) { toast(formatError(err), "error"); return; }
+  for (const [rel, text] of Object.entries(done.unsaved)) replaceUnsaved(v.path, v.path + "/" + rel, text);
+  await recheckFiles(done.files.filter((rel) => !(rel in done.unsaved)).map((rel) => v.path + "/" + rel));
+  if (done.failed.length) toast(`Couldn't write ${done.failed.join("; ")}`, "error", 9000);
+  toast(`Replaced ${count(done.replacements, "match", "matches")} in ${count(done.files.length, "file")}.`);
+  runSearch();
 }
 
 window.addEventListener("error", (event) => { toast(`Error: ${event.message}`, "error"); api.log("error", `${event.message} @ ${event.filename}:${event.lineno}`); });

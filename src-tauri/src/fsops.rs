@@ -2,7 +2,7 @@
 //! page when something on disk changed (an AI agent in a terminal edits files
 //! the editor is showing).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc;
@@ -10,7 +10,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Serialize;
+use regex::{NoExpand, Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const MAX_FILE: u64 = 24 * 1024 * 1024;
@@ -309,8 +310,87 @@ pub fn walk(root: &str, limit: usize) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Finds text in the project: a case-insensitive substring search over text
-/// files, skipping the usual generated folders.
+// ---- find and replace in the project -----------------------------------------
+
+/// Text files bigger than this aren't searched.
+const MAX_SEARCHED: u64 = 2 * 1024 * 1024;
+
+/// How the page's search box reads its text: as typed, in any case unless
+/// `case`, or as a regular expression with `regex`.
+#[derive(Deserialize, Default, Clone, Copy)]
+pub struct FindOptions {
+    #[serde(default)]
+    pub case: bool,
+    #[serde(default)]
+    pub regex: bool,
+}
+
+/// The search as a regular expression, or None for an empty one.
+fn matcher(query: &str, options: FindOptions) -> Result<Option<Regex>, String> {
+    if query.is_empty() {
+        return Ok(None);
+    }
+    let pattern = if options.regex { query.to_string() } else { regex::escape(query) };
+    let re = RegexBuilder::new(&pattern)
+        .case_insensitive(!options.case)
+        .build()
+        .map_err(|e| format!("That isn't a regular expression Orbit IDE can read: {}", e.to_string().lines().last().unwrap_or("").trim_start_matches("error: ")))?;
+    // One that matches nothing at all (`x*`, `^`) would match on every line,
+    // and a replace would write between every character.
+    if re.is_match("") {
+        return Err("That regular expression matches empty text; make it match at least one character.".into());
+    }
+    Ok(Some(re))
+}
+
+/// Every file search and replace look in, in order: below `root`, outside
+/// generated folders and .git, at most `MAX_SEARCHED`, with no NUL in its
+/// first 8 KB (binary). Symlinks aren't followed, so a replace never writes
+/// outside the project and a link to a parent folder can't loop. `each` gets
+/// the path and the bytes, and returns false to stop.
+fn text_files(root: &Path, each: &mut dyn FnMut(&Path, &[u8]) -> bool) {
+    fn visit(dir: &Path, each: &mut dyn FnMut(&Path, &[u8]) -> bool) -> bool {
+        let Ok(entries) = fs::read_dir(dir) else { return true };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if kind.is_dir() {
+                let name = entry.file_name();
+                if SKIP_DIRS.iter().any(|skip| name == *skip) {
+                    continue;
+                }
+                if !visit(&path, each) {
+                    return false;
+                }
+            } else if kind.is_file() {
+                if entry.metadata().map_or(true, |meta| meta.len() > MAX_SEARCHED) {
+                    continue;
+                }
+                let Ok(bytes) = fs::read(&path) else { continue };
+                if bytes[..bytes.len().min(8192)].contains(&0) {
+                    continue;
+                }
+                if !each(&path, &bytes) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    visit(root, each);
+}
+
+/// A text's lines, each with its ending (`\n`, `\r\n`, or none on the last),
+/// so a replace writes back the endings it read.
+fn lines_with_endings(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.split_inclusive('\n').map(|piece| {
+        let content = piece.strip_suffix('\n').map_or(piece, |line| line.strip_suffix('\r').unwrap_or(line));
+        (content, &piece[content.len()..])
+    })
+}
+
 #[derive(Serialize)]
 pub struct Hit {
     pub path: String,
@@ -318,49 +398,128 @@ pub struct Hit {
     pub text: String,
 }
 
-pub fn search(root: &str, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return Ok(Vec::new());
-    }
+/// Lines in the project that match, up to `limit`. Files open with unsaved
+/// changes (`unsaved`, by page path) are searched as the editor has them.
+pub fn search(root: &str, query: &str, options: FindOptions, unsaved: &HashMap<String, String>, limit: usize) -> Result<Vec<Hit>, String> {
+    let Some(re) = matcher(query, options)? else { return Ok(Vec::new()) };
     let root_path = Path::new(root);
     let mut hits = Vec::new();
-    fn visit(dir: &Path, root: &Path, needle: &str, hits: &mut Vec<Hit>, limit: usize) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
-        let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            if hits.len() >= limit {
-                return;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let path = entry.path();
-            let Ok(meta) = fs::metadata(&path) else { continue };
-            if meta.is_dir() {
-                if SKIP_DIRS.contains(&name.as_str()) || name == ".git" {
-                    continue;
-                }
-                visit(&path, root, needle, hits, limit);
-            } else if meta.len() <= 2 * 1024 * 1024 {
-                let Ok(bytes) = fs::read(&path) else { continue };
-                if bytes[..bytes.len().min(8192)].contains(&0) {
-                    continue;
-                }
-                let text = String::from_utf8_lossy(&bytes);
-                let rel = path.strip_prefix(root).map(page_path).unwrap_or_default();
-                for (i, line) in text.lines().enumerate() {
-                    if line.to_lowercase().contains(needle) {
-                        hits.push(Hit { path: rel.clone(), line: i as u32 + 1, text: line.trim().chars().take(240).collect() });
-                        if hits.len() >= limit {
-                            return;
-                        }
-                    }
+    text_files(root_path, &mut |path, bytes| {
+        let rel = path.strip_prefix(root_path).map(page_path).unwrap_or_default();
+        let text = match unsaved.get(&rel) {
+            Some(text) => std::borrow::Cow::Borrowed(text.as_str()),
+            None => String::from_utf8_lossy(bytes),
+        };
+        for (i, (line, _)) in lines_with_endings(&text).enumerate() {
+            if re.is_match(line) {
+                hits.push(Hit { path: rel.clone(), line: i as u32 + 1, text: line.trim().chars().take(240).collect() });
+                if hits.len() >= limit {
+                    return false;
                 }
             }
         }
-    }
-    visit(root_path, root_path, &needle, &mut hits, limit);
+        true
+    });
     Ok(hits)
+}
+
+/// `text` with every match replaced, line by line as search finds them, and
+/// how many there were. With `regex`, `$1` and `${name}` put in what a group
+/// matched (`$$` is a dollar sign); plain text goes in as it is.
+fn replace_in_text(text: &str, re: &Regex, replacement: &str, options: FindOptions) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let mut count = 0;
+    for (line, ending) in lines_with_endings(text) {
+        let found = re.find_iter(line).count();
+        if found == 0 {
+            out.push_str(line);
+        } else if options.regex {
+            out.push_str(&re.replace_all(line, replacement));
+        } else {
+            out.push_str(&re.replace_all(line, NoExpand(replacement)));
+        }
+        count += found;
+        out.push_str(ending);
+    }
+    (out, count)
+}
+
+/// A replace across the project, from the page.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceRequest {
+    pub root: String,
+    pub query: String,
+    pub replacement: String,
+    #[serde(default)]
+    pub options: FindOptions,
+    /// Only these files (page paths below the root), for a replace in one file.
+    #[serde(default)]
+    pub only: Option<Vec<String>>,
+    /// Files open with unsaved changes, by page path, and the text the editor
+    /// has: they are replaced in that text, which comes back for the editor,
+    /// and are not written.
+    #[serde(default)]
+    pub unsaved: HashMap<String, String>,
+    /// Count only; write nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Serialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Replaced {
+    /// Files with replacements (written, unless a dry run or unsaved), as page paths.
+    pub files: Vec<String>,
+    pub replacements: usize,
+    /// Files with matches that were left alone: they aren't UTF-8, so
+    /// writing them back would change more than the matches.
+    pub skipped: Vec<String>,
+    /// The new text of each unsaved file that had matches, for the editor.
+    pub unsaved: HashMap<String, String>,
+    /// Files that couldn't be written, and why.
+    pub failed: Vec<String>,
+}
+
+pub fn replace(request: ReplaceRequest) -> Result<Replaced, String> {
+    let Some(re) = matcher(&request.query, request.options)? else { return Ok(Replaced::default()) };
+    let root = Path::new(&request.root);
+    let mut done = Replaced::default();
+    text_files(root, &mut |path, bytes| {
+        let rel = path.strip_prefix(root).map(page_path).unwrap_or_default();
+        if request.only.as_ref().is_some_and(|only| !only.contains(&rel)) {
+            return true;
+        }
+        if let Some(text) = request.unsaved.get(&rel) {
+            let (new, count) = replace_in_text(text, &re, &request.replacement, request.options);
+            if count > 0 {
+                done.files.push(rel.clone());
+                done.replacements += count;
+                done.unsaved.insert(rel, new);
+            }
+            return true;
+        }
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            if lines_with_endings(&String::from_utf8_lossy(bytes)).any(|(line, _)| re.is_match(line)) {
+                done.skipped.push(rel);
+            }
+            return true;
+        };
+        let (new, count) = replace_in_text(text, &re, &request.replacement, request.options);
+        if count == 0 {
+            return true;
+        }
+        if !request.dry_run && new != text {
+            if let Err(e) = fs::write(path, &new) {
+                done.failed.push(format!("{rel}: {e}"));
+                return true;
+            }
+        }
+        done.files.push(rel);
+        done.replacements += count;
+        true
+    });
+    Ok(done)
 }
 
 // ---- watcher -------------------------------------------------------------
@@ -520,6 +679,105 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn request(root: &Path, query: &str, replacement: &str, options: FindOptions) -> ReplaceRequest {
+        ReplaceRequest {
+            root: root.to_string_lossy().to_string(),
+            query: query.into(),
+            replacement: replacement.into(),
+            options,
+            only: None,
+            unsaved: HashMap::new(),
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn replace_changes_exactly_what_search_finds() {
+        let dir = tmp("replace");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("node_modules/x")).unwrap();
+        fs::write(dir.join("src/a.rs"), "let Total = total();\r\nlet other = 1;\r\nTOTAL\n").unwrap();
+        fs::write(dir.join("b.txt"), "no match here").unwrap();
+        fs::write(dir.join("node_modules/x/c.js"), "total").unwrap();
+        let root = dir.to_str().unwrap();
+
+        let hits = search(root, "total", FindOptions::default(), &HashMap::new(), 100).unwrap();
+        assert_eq!(hits.iter().map(|h| (h.path.as_str(), h.line)).collect::<Vec<_>>(), vec![("src/a.rs", 1), ("src/a.rs", 3)]);
+        assert_eq!(search(root, "Total", FindOptions { case: true, regex: false }, &HashMap::new(), 100).unwrap().len(), 1);
+
+        // A dry run counts and writes nothing.
+        let counted = replace(ReplaceRequest { dry_run: true, ..request(&dir, "total", "sum", FindOptions::default()) }).unwrap();
+        assert_eq!((counted.files.clone(), counted.replacements), (vec!["src/a.rs".to_string()], 3));
+        assert!(fs::read_to_string(dir.join("src/a.rs")).unwrap().contains("Total"));
+
+        let done = replace(request(&dir, "total", "sum", FindOptions::default())).unwrap();
+        assert_eq!(done.replacements, 3);
+        // Line endings stay as they were; generated folders are left alone.
+        assert_eq!(fs::read_to_string(dir.join("src/a.rs")).unwrap(), "let sum = sum();\r\nlet other = 1;\r\nsum\n");
+        assert_eq!(fs::read_to_string(dir.join("node_modules/x/c.js")).unwrap(), "total");
+        assert!(search(root, "total", FindOptions::default(), &HashMap::new(), 100).unwrap().is_empty());
+    }
+
+    #[test]
+    fn regular_expressions_bring_in_groups_and_plain_text_goes_in_as_it_is() {
+        let dir = tmp("replace-regex");
+        fs::write(dir.join("a.py"), "def get_name(self):\n    return self.get_name_value()\n").unwrap();
+        let regex = FindOptions { case: true, regex: true };
+        replace(request(&dir, r"get_(\w+)\(", "fetch_$1(", regex)).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("a.py")).unwrap(), "def fetch_name(self):\n    return self.fetch_name_value()\n");
+        replace(request(&dir, "fetch_name(", "$1 costs $5", FindOptions::default())).unwrap();
+        assert!(fs::read_to_string(dir.join("a.py")).unwrap().starts_with("def $1 costs $5self):"));
+    }
+
+    #[test]
+    fn unsaved_files_are_replaced_in_the_editor_text_and_not_written() {
+        let dir = tmp("replace-unsaved");
+        fs::write(dir.join("open.js"), "old on disk").unwrap();
+        fs::write(dir.join("other.js"), "old").unwrap();
+        let mut unsaved = HashMap::new();
+        unsaved.insert("open.js".to_string(), "old, old, edited".to_string());
+        let done = replace(ReplaceRequest { unsaved, ..request(&dir, "old", "new", FindOptions::default()) }).unwrap();
+        assert_eq!(done.replacements, 3);
+        assert_eq!(done.unsaved.get("open.js").map(String::as_str), Some("new, new, edited"));
+        assert_eq!(fs::read_to_string(dir.join("open.js")).unwrap(), "old on disk");
+        // Search sees the editor's text too.
+        let mut editor = HashMap::new();
+        editor.insert("open.js".to_string(), "fresh\nnew line".to_string());
+        let hits = search(dir.to_str().unwrap(), "new", FindOptions::default(), &editor, 10).unwrap();
+        assert_eq!(hits.iter().map(|h| (h.path.as_str(), h.line)).collect::<Vec<_>>(), vec![("open.js", 2), ("other.js", 1)]);
+        assert_eq!(fs::read_to_string(dir.join("other.js")).unwrap(), "new");
+        // One file only.
+        fs::write(dir.join("other.js"), "old").unwrap();
+        fs::write(dir.join("third.js"), "old").unwrap();
+        let one = replace(ReplaceRequest { only: Some(vec!["third.js".into()]), ..request(&dir, "old", "new", FindOptions::default()) }).unwrap();
+        assert_eq!(one.files, vec!["third.js".to_string()]);
+        assert_eq!(fs::read_to_string(dir.join("other.js")).unwrap(), "old");
+    }
+
+    #[test]
+    fn files_that_are_not_utf8_and_links_out_of_the_project_are_left_alone() {
+        let dir = tmp("replace-skip");
+        let outside = tmp("replace-outside");
+        fs::write(outside.join("secret.txt"), "old").unwrap();
+        fs::write(dir.join("latin1.txt"), b"caf\xe9 old").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+        let done = replace(request(&dir, "old", "new", FindOptions::default())).unwrap();
+        assert_eq!((done.replacements, done.skipped.clone()), (0, vec!["latin1.txt".to_string()]));
+        assert_eq!(fs::read(dir.join("latin1.txt")).unwrap(), b"caf\xe9 old");
+        assert_eq!(fs::read_to_string(outside.join("secret.txt")).unwrap(), "old");
+    }
+
+    #[test]
+    fn patterns_that_match_nothing_or_dont_parse_are_refused() {
+        let regex = FindOptions { case: false, regex: true };
+        assert!(matcher("x*", regex).unwrap_err().contains("matches empty text"));
+        assert!(matcher("(open", regex).unwrap_err().starts_with("That isn't a regular expression"));
+        assert!(matcher("", FindOptions::default()).unwrap().is_none());
+        // Plain text is plain, brackets and all.
+        assert!(matcher("(open", FindOptions::default()).unwrap().unwrap().is_match("f(open)"));
     }
 
     #[test]

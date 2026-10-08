@@ -65,6 +65,8 @@ pub struct Settings {
     pub sidebar_width: u32,
     pub ai_panel_width: u32,
     pub terminal_height: u32,
+    /// Start the language servers installed on this computer (src/lsp.rs).
+    pub language_servers: bool,
 }
 
 impl Default for Settings {
@@ -91,6 +93,7 @@ impl Default for Settings {
             sidebar_width: 280,
             ai_panel_width: 460,
             terminal_height: 260,
+            language_servers: true,
         }
     }
 }
