@@ -20,7 +20,11 @@
 //! Debug builds don't check unless `ORBIT_UPDATES_URL` points them at a
 //! Mission Control, e.g. `ORBIT_UPDATES_URL=http://127.0.0.1:8001 sh run.sh`.
 //!
-//! The same module is in Orbit Chat and in Orbit Pass for Windows; keep them in step.
+//! On Linux only the AppImage updates itself (the updater replaces the file it
+//! runs from); a copy installed from the .deb or .rpm is left to its package,
+//! and the Orbit Installer or a new package brings it up to date.
+//!
+//! The same module is in Orbit Chat, Orbit Mail and Orbit Pass for Windows and Linux; keep them in step.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -69,6 +73,9 @@ pub fn start(app: &AppHandle, before_exit: impl Fn(&AppHandle) + Send + Sync + '
     if cfg!(debug_assertions) && std::env::var_os("ORBIT_UPDATES_URL").is_none() {
         return;
     }
+    if !updates_itself() {
+        return;
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         let mut wait = FIRST_CHECK;
@@ -80,8 +87,16 @@ pub fn start(app: &AppHandle, before_exit: impl Fn(&AppHandle) + Send + Sync + '
     });
 }
 
+/// Whether this copy can replace itself: everywhere but a Linux package install.
+fn updates_itself() -> bool {
+    !cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_some()
+}
+
 /// Checks now. `manual` (from the menu) also says when there is nothing new or the check failed.
 pub async fn check(app: &AppHandle, manual: bool) {
+    if !updates_itself() {
+        return;
+    }
     let state = app.state::<Updates>();
     if state.checking.swap(true, Ordering::SeqCst) {
         return;

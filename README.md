@@ -154,6 +154,13 @@ tagged `v<version>-build.<run number>` (marked as a pre-release) with:
 * `OrbitIDE.dmg` and `Orbit-IDE-macOS.app.zip` for the Mac
 * `Orbit-IDE-Windows-Setup.exe` (installer) and
   `Orbit-IDE-Windows-portable.exe` for Windows
+* for Linux, built on Ubuntu 22.04 by a job of its own that never holds the
+  release back: `Orbit-IDE-Linux-amd64.deb` (Ubuntu, Debian, Mint, Pop!_OS),
+  `Orbit-IDE-Linux-x86_64.rpm` (Fedora, RHEL, openSUSE) and
+  `Orbit-IDE-Linux-x86_64.AppImage` (everything else). Only the AppImage
+  updates itself; a package is updated by the Orbit Installer for Linux
+  (`curl -fsSL https://orbit.com.ai/install.sh | bash`) or a newer package.
+  Move to Trash uses `gio trash` there.
 * `Orbit-IDE-macOS.app.tar.gz`, the Mac update bundle, and
   `orbit-update.json`, which names the version and build and carries the
   signature of each update bundle (the Windows installer doubles as its own).

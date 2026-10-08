@@ -1,6 +1,7 @@
 name: Build and release
 
-# Every push to main builds the Mac and Windows apps and publishes them as a
+# Every push to main builds the Mac and Windows apps (and the Linux packages,
+# which never hold the release back) and publishes them as a
 # pre-release tagged v<version>-build.<run number>; a v* tag publishes a
 # release. Pull requests build without publishing.
 #
@@ -136,10 +137,67 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Linux: the .deb (Ubuntu, Debian), the .rpm (Fedora, RHEL, openSUSE) and the
+  # AppImage (everything else; the one that updates itself). New, so it never
+  # holds the release back: the release job waits for it but not on it.
+  linux:
+    name: Linux packages
+    needs: version
+    # The oldest supported Ubuntu, so the AppImage runs on as many distributions as it can.
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Compiled in for the update check (src-tauri/src/updates.rs).
+      ORBIT_BUILD: ${{ needs.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Linux libraries
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file libfuse2
+      - name: Stamp the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then updater=true; else updater=false; fi
+          echo "TAURI_RELEASE_CONFIG={\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":$updater}}" >> "$GITHUB_ENV"
+      - name: Build the packages
+        shell: bash
+        working-directory: .
+        run: |
+          npm ci
+          sh scripts/vendor.sh
+          npx --no-install tauri build --bundles deb,rpm,appimage --config "$TAURI_RELEASE_CONFIG"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          bundle=src-tauri/target/release/bundle
+          copy() { cp "$1" "$GITHUB_WORKSPACE/dist/$2"; if [ -f "$1.sig" ]; then cp "$1.sig" "$GITHUB_WORKSPACE/dist/$2.sig"; fi; }
+          copy "$(ls "$bundle"/deb/*.deb)" Orbit-IDE-Linux-amd64.deb
+          copy "$(ls "$bundle"/rpm/*.rpm)" Orbit-IDE-Linux-x86_64.rpm
+          copy "$(ls "$bundle"/appimage/*.AppImage)" Orbit-IDE-Linux-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbit-IDE-Linux
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: [version, build]
-    if: github.event_name == 'push'
+    needs: [version, build, linux]
+    # Whatever became of the Linux packages: they are attached when they built.
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.version.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
