@@ -1,7 +1,8 @@
 //! Updates, as Orbit Mission Control hands them out.
 //!
 //! Half a minute after launch and every four hours after that (and from
-//! *Check for Updates…* in the app menu on the Mac) the app asks
+//! *Help > Check for Updates…* on the Mac, or the button in Settings, About
+//! on Windows and Linux) the app asks
 //! `https://control.orbit.com.ai/api/updates/orbit-ide/{target}/{arch}/{version}?build={n}`.
 //! Mission Control answers from this repository's GitHub releases: `204` when
 //! this is the newest build, else the newer build's version, download link and
@@ -230,24 +231,33 @@ fn can_replace_app() -> bool {
     }
 }
 
-/// The Mac app menu with *Check for Updates…* under *About*.
-#[cfg(target_os = "macos")]
-pub fn menu(app: &AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+/// The id of the *Check for Updates…* menu item.
+#[allow(dead_code)] // each app uses the parts it needs
+pub const MENU_ID: &str = "check-for-updates";
 
-    let menu = Menu::default(app)?;
-    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
-        let item = MenuItem::with_id(app, "check-for-updates", "Check for Updates…", true, None::<&str>)?;
-        app_menu.insert(&item, 1)?;
-    }
-    app.set_menu(menu)?;
-    app.on_menu_event(|app, event| {
-        if event.id() == "check-for-updates" {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move { check(&app, true).await });
-        }
-    });
-    Ok(())
+/// The Help menu, with *Check for Updates…* in it. On the Mac it is the menu
+/// bar's own Help menu, with the search field.
+#[allow(dead_code)]
+pub fn help_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let check = tauri::menu::MenuItem::with_id(app, MENU_ID, "Check for Updates…", updates_itself(), None::<&str>)?;
+    let help = tauri::menu::Submenu::with_items(app, "Help", true, &[&check])?;
+    #[cfg(target_os = "macos")]
+    help.set_as_help_menu_for_nsapp()?;
+    Ok(help)
+}
+
+/// Whether this copy updates itself, so Settings knows to offer *Check for Updates*.
+#[allow(dead_code)]
+pub fn available() -> bool {
+    updates_itself()
+}
+
+/// *Check for Updates* from the page's Settings, where Windows and Linux have it
+/// (the Mac has it in the Help menu). Says what it found, as the menu item does.
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle) {
+    check(&app, true).await;
 }
 
 #[cfg(test)]

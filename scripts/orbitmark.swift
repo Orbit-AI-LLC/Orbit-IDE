@@ -1,19 +1,22 @@
 // Orbit family mark renderer.
 //
 // The Orbit apps' marks share one idea: the app's own object (a spark, an
-// envelope, a calendar page, a speech bubble, a terminal window, a rocket,
-// a planet) in white on its own colour, with a tilted orbit round it and a
-// moon riding the orbit at the top right. The orbit passes behind the object
-// above and in front of it below, with a clear gap wherever the two cross,
-// so every mark reads as something in orbit. Orbit Pass keeps its own mark
-// (the flat ring, moon and keyhole on black); this file doesn't draw it.
+// envelope, a calendar page, a speech bubble, the code sign, a rocket,
+// a planet, a compass, a shield) in white on its own colour, with a tilted
+// orbit round it and a moon riding the orbit at the top right. The orbit
+// passes behind the object above and in front of it below, with a clear gap
+// wherever the two cross, so every mark reads as something in orbit. Orbit
+// Authenticator's is the other way round, its strong blue on white, as the
+// app's own screens are. Orbit Pass keeps its own mark (the flat ring, moon
+// and keyhole on black); this file doesn't draw it.
 //
 // This one file is the same in every Orbit repository that ships one of
-// these marks (Orbit AI, Orbit Chat, Orbit IDE, Orbit Mail, Orbit Mission
-// Control and the Orbit Website), so the family is designed in one place.
-// Each repository's scripts/build_icon.py compiles it and writes that app's
-// icons. Edit the geometry or the colours here, copy the file to the other
-// repositories, and re-run their build_icon.py; never edit the outputs.
+// these marks (Orbit AI, Orbit Browser, Orbit Chat, Orbit IDE, Orbit Mail,
+// Orbit Mission Control, Orbit Pass for Orbit Authenticator, and the Orbit
+// Website), so the family is designed in one place. Each repository's
+// scripts/build_icon.py compiles it and writes that app's icons. Edit the
+// geometry or the colours here, copy the file to the other repositories, and
+// re-run their build_icon.py; never edit the outputs.
 //
 // Build (the toolchain compiler is enough, no Xcode licence needed):
 //
@@ -28,7 +31,7 @@
 //   orbitmark path <mark> <box> <fill> [small|tiny]                 bare path data in a box-unit square
 //   orbitmark colour <mark>                                         the mark's one flat colour
 //
-//   mark     ai | mail | calendar | chat | ide | control | orbit
+//   mark     ai | mail | calendar | chat | ide | control | orbit | browser | authenticator
 //   layout   bleed    the colour square, edge to edge (iOS app icons, touch icons)
 //            mac      the macOS icon grid: an 824/1024 tile with 185/1024 corners
 //            tile     a rounded tile over the whole canvas (favicons, in-app marks)
@@ -165,13 +168,21 @@ func bubble(_ c: P, _ r: CGFloat, dots: CGFloat) -> CGPath {
     return b
 }
 
-/// Orbit IDE: a terminal window with its prompt and cursor.
-func terminal(_ c: P, _ w: CGFloat, _ h: CGFloat, weight: CGFloat, cursor: Bool) -> CGPath {
-    let x0 = c.x - w / 2, y0 = c.y - h / 2, k = h * 0.19
-    var win = rrect(x0, y0, w, h, h * 0.16)
-    win = win.subtracting(stroked(line([P(x: x0 + w * 0.2, y: c.y - k), P(x: x0 + w * 0.2 + k * 1.1, y: c.y), P(x: x0 + w * 0.2, y: c.y + k)]), weight))
-    if cursor { win = win.subtracting(stroked(line([P(x: c.x + w * 0.02, y: c.y + k), P(x: c.x + w * 0.24, y: c.y + k)]), weight)) }
-    return win
+/// Orbit IDE: the code sign, </>, whose slash is an orbit, steep and narrow,
+/// with the moon at its top. At 16 px a plain slash reads better.
+func codeSign(_ d: Detail) -> CGPath {
+    let weight: CGFloat = d == .full ? 70 : 84
+    let gap: CGFloat = 200, h: CGFloat = 205, reach: CGFloat = 150
+    let left = line([P(x: 512 - gap, y: 512 - h), P(x: 512 - gap - reach, y: 512), P(x: 512 - gap, y: 512 + h)])
+    let right = line([P(x: 512 + gap, y: 512 - h), P(x: 512 + gap + reach, y: 512), P(x: 512 + gap, y: 512 + h)])
+    let brackets = stroked(left, weight).union(stroked(right, weight))
+    if d == .tiny {
+        return brackets.union(stroked(line([P(x: 560, y: 300), P(x: 464, y: 724)]), weight))
+    }
+    var slash = Orbit()
+    slash.rx = 268; slash.ry = 64; slash.tilt = -66; slash.w = 42; slash.moonR = 44; slash.moonAt = -6
+    if d == .small { slash.w = 58; slash.moonR = 54; slash.gap = 26 }
+    return orbiting(brackets, slash)
 }
 
 /// Orbit Mission Control: a rocket climbing to the right.
@@ -203,6 +214,70 @@ func rocket(_ c: P, _ s: CGFloat, window: Bool) -> CGPath {
     return turned(r.union(flame), about: c, by: 38)
 }
 
+/// Orbit Browser: a compass. Its dial has four ticks; its needle points up
+/// and to the right, the north half cut right through the face and the
+/// south half left standing inside a cut of its own, so the needle reads in
+/// one colour at any size.
+func compass(_ c: P, _ r: CGFloat, needle: CGFloat, width: CGFloat, toward deg: CGFloat, gap: CGFloat, ticks: Bool, split: Bool) -> CGPath {
+    let toward = deg * D, across = toward + .pi / 2
+    func p(_ along: CGFloat, _ side: CGFloat) -> P {
+        P(x: c.x + along * cos(toward) + side * cos(across), y: c.y + along * sin(toward) + side * sin(across))
+    }
+    func shape(_ pts: [P]) -> CGPath { let s = CGMutablePath(); s.addLines(between: pts); s.closeSubpath(); return s }
+    let length = r * needle, half = r * width
+    var face = disc(c, r)
+    if ticks {
+        for k in 0..<4 {
+            let a = CGFloat(k) * .pi / 2
+            face = face.subtracting(stroked(line([P(x: c.x + r * 0.8 * cos(a), y: c.y + r * 0.8 * sin(a)),
+                                                  P(x: c.x + r * 1.2 * cos(a), y: c.y + r * 1.2 * sin(a))]), gap * 1.5))
+        }
+    }
+    if !split {
+        return face.subtracting(grown(shape([p(length, 0), p(0, half), p(-length, 0), p(0, -half)]), gap))
+    }
+    let north = shape([p(length, 0), p(0, half), p(0, -half)])
+    let south = shape([p(-length, 0), p(0, -half), p(0, half)])
+    return face.subtracting(grown(north, gap)).subtracting(stroked(south, gap * 2))
+}
+
+/// Orbit Authenticator: a shield.
+func shield(_ c: P, _ w: CGFloat, _ h: CGFloat) -> CGPath {
+    let x0 = c.x - w / 2, x1 = c.x + w / 2, y0 = c.y - h / 2, y1 = c.y + h / 2, r = w * 0.16
+    let p = CGMutablePath()
+    p.move(to: P(x: x0 + r, y: y0))
+    p.addQuadCurve(to: P(x: c.x, y: y0 - h * 0.035), control: P(x: c.x - w * 0.25, y: y0 - h * 0.005))
+    p.addQuadCurve(to: P(x: x1 - r, y: y0), control: P(x: c.x + w * 0.25, y: y0 - h * 0.005))
+    p.addQuadCurve(to: P(x: x1, y: y0 + r), control: P(x: x1, y: y0))
+    p.addLine(to: P(x: x1, y: y0 + h * 0.42))
+    p.addCurve(to: P(x: c.x, y: y1), control1: P(x: x1, y: y0 + h * 0.74), control2: P(x: c.x + w * 0.24, y: y1 - h * 0.08))
+    p.addCurve(to: P(x: x0, y: y0 + h * 0.42), control1: P(x: c.x - w * 0.24, y: y1 - h * 0.08), control2: P(x: x0, y: y0 + h * 0.74))
+    p.addLine(to: P(x: x0, y: y0 + r))
+    p.addQuadCurve(to: P(x: x0 + r, y: y0), control: P(x: x0, y: y0))
+    p.closeSubpath()
+    return p
+}
+
+/// A countdown: a disc with the time already gone cut out, clockwise from twelve.
+func countdown(_ c: P, _ r: CGFloat, left deg: CGFloat) -> CGPath {
+    let p = CGMutablePath()
+    p.move(to: c)
+    p.addArc(center: c, radius: r, startAngle: -.pi / 2, endAngle: -.pi / 2 + deg * D, clockwise: false)
+    p.closeSubpath()
+    return p
+}
+
+/// Orbit Authenticator's object: a shield with a countdown dial in it, the
+/// dial's last quarter already gone (the time-based code running out).
+func authenticatorGlyph(_ d: Detail) -> CGPath {
+    let bold = d != .full
+    let w: CGFloat = bold ? 470 : 440, h: CGFloat = bold ? 550 : 515
+    let at = P(x: 512, y: 525)
+    let dial = P(x: 512, y: at.y - h * 0.07), r = w * (bold ? 0.29 : 0.28), gap = w * (bold ? 0.065 : 0.05)
+    let body = shield(at, w, h).subtracting(disc(dial, r)).union(countdown(dial, r - gap, left: 270))
+    return orbiting(body, orbit(d) { $0.c.y = 568 })
+}
+
 // MARK: - The marks
 
 typealias RGB = (r: CGFloat, g: CGFloat, b: CGFloat)
@@ -220,6 +295,7 @@ struct Mark {
     let tile: (top: RGB, bottom: RGB)   // the tile behind the white mark
     let ink: (top: RGB, bottom: RGB)    // the bare mark: light enough for dark pages, deep enough for light ones
     let solid: RGB                      // one flat colour, where a gradient can't go
+    var onTile: (top: RGB, bottom: RGB)? = nil  // the mark's own colours on its tile, if it isn't white
     let glyph: (Detail) -> CGPath
 }
 
@@ -248,15 +324,23 @@ let MARKS: [String: Mark] = [
                  tile: (hex("#4be38f"), hex("#0fa35a")), ink: (hex("#2fd27a"), hex("#0e9e57")), solid: hex("#16b765")) { d in
         orbiting(bubble(P(x: 512, y: 490), d == .full ? 250 : 270, dots: d == .tiny ? 0 : (d == .full ? 0.13 : 0.16)), orbit(d) { $0.c.y = 500 })
     },
-    "ide": Mark(label: "Orbit IDE", what: "a terminal window in orbit",
-                tile: (hex("#ffb547"), hex("#f2611d")), ink: (hex("#ffa634"), hex("#f0601c")), solid: hex("#f7801f")) { d in
-        let s: CGFloat = d == .full ? 1 : 1.08
-        return orbiting(terminal(centre, 500 * s, 390 * s, weight: d == .full ? 39 : 52, cursor: d != .tiny), orbit(d))
-    },
+    "ide": Mark(label: "Orbit IDE", what: "the code sign, its slash an orbit",
+                tile: (hex("#ffb547"), hex("#f2611d")), ink: (hex("#ffa634"), hex("#f0601c")), solid: hex("#f7801f"),
+                glyph: codeSign),
     "control": Mark(label: "Orbit Mission Control", what: "a rocket in orbit",
                     tile: (hex("#3b4fc4"), hex("#141b4d")), ink: (hex("#6f7dff"), hex("#3a45d1")), solid: hex("#3d4fd6")) { d in
         orbiting(rocket(P(x: 512, y: 520), d == .full ? 530 : 560, window: d == .full), orbit(d) { $0.c.y = 540 })
     },
+    "browser": Mark(label: "Orbit Browser", what: "a compass in orbit",
+                    tile: (hex("#3fe0cf"), hex("#0a7f8c")), ink: (hex("#24cdbf"), hex("#0b8592")), solid: hex("#12a3a6")) { d in
+        let r: CGFloat = d == .full ? 250 : 268
+        let face = compass(P(x: 512, y: 500), r, needle: 0.72, width: 0.21, toward: -45,
+                           gap: d == .full ? 20 : 28, ticks: d == .full, split: d != .tiny)
+        return orbiting(face, orbit(d) { $0.c.y = 540 })
+    },
+    "authenticator": Mark(label: "Orbit Authenticator", what: "a shield and its countdown in orbit",
+                          tile: (hex("#ffffff"), hex("#e4ebf7")), ink: (hex("#3d8eff"), hex("#0057e6")), solid: hex("#006fff"),
+                          onTile: (hex("#3d8eff"), hex("#0050e0")), glyph: authenticatorGlyph),
     "orbit": Mark(label: "Orbit", what: "a planet and its moon",
                   tile: (hex("#1a56c9"), hex("#0b2a5b")), ink: (hex("#4a86ff"), hex("#1f56d6")), solid: hex("#1a56c9")) { d in
         // The planet keeps its ring even at the smallest size: without it, it's a dot.
@@ -319,7 +403,11 @@ func renderPNG(_ m: Mark, w: Int, h: Int, layout: Layout, detail: Detail, opaque
     let glyph = placed(m.glyph(detail), W, H, span(layout, detail))
     if let tile = tilePath(layout, W, H) {
         ctx.saveGState(); ctx.addPath(tile); ctx.clip(); gradient(m.tile, over: tile.boundingBox); ctx.restoreGState()
-        ctx.addPath(glyph); ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fillPath()
+        if let pair = m.onTile {
+            ctx.saveGState(); ctx.addPath(glyph); ctx.clip(); gradient(pair, over: glyph.boundingBox); ctx.restoreGState()
+        } else {
+            ctx.addPath(glyph); ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fillPath()
+        }
     } else if layout == .colour || layout == .dark {
         ctx.saveGState(); ctx.addPath(glyph); ctx.clip(); gradient(m.ink, over: glyph.boundingBox); ctx.restoreGState()
     } else {
@@ -381,7 +469,11 @@ func svgDocument(_ key: String, _ m: Mark, layout: Layout, w: Int, h: Int, detai
         case .mac: body += "<rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#\(id))\"/>"
         default: body += "<rect width=\"\(num(W, 1))\" height=\"\(num(H, 1))\" rx=\"\(num(min(W, H) * 0.225, 1))\" fill=\"url(#\(id))\"/>"
         }
-        body += "<path fill=\"#fff\" d=\"\(d)\"/>"
+        if let pair = m.onTile {
+            body += svgGradient("orbit-\(key)-mark", pair) + "<path fill=\"url(#orbit-\(key)-mark)\" d=\"\(d)\"/>"
+        } else {
+            body += "<path fill=\"#fff\" d=\"\(d)\"/>"
+        }
     case .colour:
         let id = "orbit-\(key)-ink"
         body += svgGradient(id, m.ink) + "<path fill=\"url(#\(id))\" d=\"\(d)\"/>"

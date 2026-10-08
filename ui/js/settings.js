@@ -90,9 +90,19 @@ export function openSettings(page = "general") {
 
   // About
   const info = state.info || {};
+  // The Mac app has Check for Updates in its Help menu; Windows and Linux have it here.
+  const checkForUpdates = el("button", { class: "btn", text: "Check for Updates", onclick: async () => {
+    checkForUpdates.disabled = true;
+    checkForUpdates.textContent = "Checking…";
+    // The app says what it found (up to date, ready to restart, or failed) in a dialog of its own.
+    await api.checkForUpdates().catch((err) => toast(formatError(err), "error"));
+    checkForUpdates.disabled = false;
+    checkForUpdates.textContent = "Check for Updates";
+  } });
   pages.about = el("div", { class: "settings-page" }, [
     el("p", { text: `Orbit IDE ${info.version || ""}` }),
-    el("p", { text: "An offline editor. Nothing leaves this Mac except what you send to the providers you choose." }),
+    info.updates && info.os !== "macos" ? el("div", { class: "field" }, [checkForUpdates, el("div", { class: "hint", text: "Orbit IDE checks for updates on its own every few hours. Check now to get a new version straight away." })]) : null,
+    el("p", { text: `An offline editor. Nothing leaves this ${info.os === "macos" ? "Mac" : "computer"} except what you send to the providers you choose.` }),
     el("div", { class: "field" }, [el("label", { text: "Shell" }), el("div", { class: "hint", text: info.shell || "" })]),
     el("div", { class: "field" }, [el("label", { text: "PATH seen by terminals and agents" }), el("div", { class: "hint", style: "word-break:break-all;-webkit-user-select:text;user-select:text", text: info.path || "" })]),
   ]);

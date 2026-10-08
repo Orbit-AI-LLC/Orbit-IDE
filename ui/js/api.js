@@ -12,6 +12,8 @@ export function listen(name, handler) {
 
 export const api = {
   appInfo: () => invoke("app_info"),
+  // Windows and Linux: the app checks, then says what it found in a dialog of its own.
+  checkForUpdates: () => invoke("check_for_updates"),
   log: (level, message) => invoke("ui_log", { level, message: String(message) }).catch(() => {}),
   settingsLoad: () => invoke("settings_load"),
   settingsSave: (settings) => invoke("settings_save", { settings }),

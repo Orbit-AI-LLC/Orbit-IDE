@@ -37,6 +37,8 @@ struct AppInfo {
     path: String,
     selftest: bool,
     os: String,
+    /// Whether this copy updates itself, so Settings offers Check for Updates.
+    updates: bool,
 }
 
 #[tauri::command]
@@ -48,6 +50,7 @@ fn app_info(app: AppHandle) -> AppInfo {
         path: shell::login_path().to_string(),
         selftest: std::env::var_os("ORBIT_IDE_SELFTEST").is_some(),
         os: std::env::consts::OS.to_string(),
+        updates: updates::available(),
     }
 }
 
@@ -330,6 +333,27 @@ fn chrono_like_now() -> String {
     format!("unix {secs}")
 }
 
+/// The Mac menu bar: Tauri's usual menus, with *Check for Updates…* in Help.
+/// (Windows and Linux have it in Settings, About.)
+#[cfg(target_os = "macos")]
+fn mac_menu(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, HELP_SUBMENU_ID};
+
+    let menu = Menu::default(app)?;
+    if let Some(help) = menu.get(HELP_SUBMENU_ID) {
+        menu.remove(&help)?;
+    }
+    menu.append(&updates::help_menu(app)?)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id() == updates::MENU_ID {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { updates::check(&app, true).await });
+        }
+    });
+    Ok(())
+}
+
 fn main() {
     install_panic_log();
     let app = tauri::Builder::default()
@@ -383,6 +407,7 @@ fn main() {
             ai_openrouter_models,
             ai_openrouter_chat,
             ai_cancel,
+            updates::check_for_updates,
         ])
         .setup(|app| {
             // Warm the login PATH off the main thread so the first terminal is quick.
@@ -390,7 +415,7 @@ fn main() {
                 let _ = shell::login_path();
             });
             #[cfg(target_os = "macos")]
-            updates::menu(app.handle())?;
+            mac_menu(app.handle())?;
             // The Windows installer closes the app itself; the terminals go first.
             updates::start(app.handle(), |app| pty::kill_all(&app.state::<pty::PtyState>()));
             Ok(())
