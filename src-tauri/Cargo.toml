@@ -14,7 +14,7 @@ serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 portable-pty = "0.9"
-base64 = "0.22"
+base64 = "0.23"
 ureq = { version = "2", default-features = false, features = ["json", "native-tls", "gzip"] }
 native-tls = "0.2"
 notify = "8"
