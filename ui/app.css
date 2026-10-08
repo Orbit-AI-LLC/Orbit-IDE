@@ -231,7 +231,7 @@ kbd { font: 11px var(--mono); background: var(--bg-raised); border: 1px solid va
 .editor-area { flex: 1; position: relative; min-height: 0; }
 .editor-host { position: absolute; inset: 0; }
 .welcome { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); text-align: center; padding: 24px; }
-.welcome-mark { width: 100px; height: 72px; background: url(logo.svg) center / contain no-repeat; }
+.welcome-mark { width: 84px; height: 72px; background: url(logo.svg) center / contain no-repeat; }
 .welcome h1 { margin: 4px 0 0; font-size: 22px; font-weight: 600; color: var(--text); }
 .welcome p { margin: 0; max-width: 380px; }
 .welcome-keys { display: grid; grid-template-columns: auto auto; gap: 6px 24px; margin-top: 16px; font-size: 12px; text-align: left; }

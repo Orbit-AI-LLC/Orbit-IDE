@@ -5,10 +5,11 @@
 // a planet, a compass, a shield) in white on its own colour, with a tilted
 // orbit round it and a moon riding the orbit at the top right. The orbit
 // passes behind the object above and in front of it below, with a clear gap
-// wherever the two cross, so every mark reads as something in orbit. Orbit
-// Authenticator's is the other way round, its strong blue on white, as the
-// app's own screens are. Orbit Pass keeps its own mark (the flat ring, moon
-// and keyhole on black); this file doesn't draw it.
+// wherever the two cross, so every mark reads as something in orbit. Two are
+// drawn in colour rather than white: Orbit IDE's in bright cyan and violet on
+// a dark editor's tile, and Orbit Authenticator's in its strong blue on white,
+// as the app's own screens are. Orbit Pass keeps its own mark (the flat ring,
+// moon and keyhole on black); this file doesn't draw it.
 //
 // This one file is the same in every Orbit repository that ships one of
 // these marks (Orbit AI, Orbit Browser, Orbit Chat, Orbit IDE, Orbit Mail,
@@ -168,21 +169,23 @@ func bubble(_ c: P, _ r: CGFloat, dots: CGFloat) -> CGPath {
     return b
 }
 
-/// Orbit IDE: the code sign, </>, whose slash is an orbit, steep and narrow,
-/// with the moon at its top. At 16 px a plain slash reads better.
+/// Orbit IDE: the code sign, </>, whose slash is an orbit, steep and wide
+/// enough to read as one, round a small planet, with the moon at its top. At
+/// 16 px a plain slash reads better.
 func codeSign(_ d: Detail) -> CGPath {
-    let weight: CGFloat = d == .full ? 70 : 84
-    let gap: CGFloat = 200, h: CGFloat = 205, reach: CGFloat = 150
+    let bold = d != .full
+    let weight: CGFloat = bold ? 80 : 66
+    let gap: CGFloat = 240, h: CGFloat = 165, reach: CGFloat = 118
     let left = line([P(x: 512 - gap, y: 512 - h), P(x: 512 - gap - reach, y: 512), P(x: 512 - gap, y: 512 + h)])
     let right = line([P(x: 512 + gap, y: 512 - h), P(x: 512 + gap + reach, y: 512), P(x: 512 + gap, y: 512 + h)])
     let brackets = stroked(left, weight).union(stroked(right, weight))
     if d == .tiny {
-        return brackets.union(stroked(line([P(x: 560, y: 300), P(x: 464, y: 724)]), weight))
+        return brackets.union(stroked(line([P(x: 560, y: 330), P(x: 464, y: 694)]), weight))
     }
     var slash = Orbit()
-    slash.rx = 268; slash.ry = 64; slash.tilt = -66; slash.w = 42; slash.moonR = 44; slash.moonAt = -6
-    if d == .small { slash.w = 58; slash.moonR = 54; slash.gap = 26 }
-    return orbiting(brackets, slash)
+    slash.rx = 330; slash.ry = 112; slash.tilt = -66; slash.w = 48; slash.moonR = 54; slash.moonAt = -10; slash.gap = 24
+    if bold { slash.w = 64; slash.moonR = 64; slash.gap = 28 }
+    return orbiting(brackets.union(disc(centre, bold ? 66 : 60)), slash)
 }
 
 /// Orbit Mission Control: a rocket climbing to the right.
@@ -325,8 +328,8 @@ let MARKS: [String: Mark] = [
         orbiting(bubble(P(x: 512, y: 490), d == .full ? 250 : 270, dots: d == .tiny ? 0 : (d == .full ? 0.13 : 0.16)), orbit(d) { $0.c.y = 500 })
     },
     "ide": Mark(label: "Orbit IDE", what: "the code sign, its slash an orbit",
-                tile: (hex("#ffb547"), hex("#f2611d")), ink: (hex("#ffa634"), hex("#f0601c")), solid: hex("#f7801f"),
-                glyph: codeSign),
+                tile: (hex("#26335f"), hex("#0b1020")), ink: (hex("#38c4ea"), hex("#7466f2")), solid: hex("#5b8def"),
+                onTile: (hex("#6ee7f9"), hex("#8b7cf8")), glyph: codeSign),
     "control": Mark(label: "Orbit Mission Control", what: "a rocket in orbit",
                     tile: (hex("#3b4fc4"), hex("#141b4d")), ink: (hex("#6f7dff"), hex("#3a45d1")), solid: hex("#3d4fd6")) { d in
         orbiting(rocket(P(x: 512, y: 520), d == .full ? 530 : 560, window: d == .full), orbit(d) { $0.c.y = 540 })

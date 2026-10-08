@@ -4,3 +4,7 @@ src-tauri/target/
 dist/
 .DS_Store
 src-tauri/gen/
+
+# Claude Code session state and worktrees; only the shared settings are kept
+.claude/*
+!.claude/settings.json

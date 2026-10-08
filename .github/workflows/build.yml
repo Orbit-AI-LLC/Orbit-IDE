@@ -97,6 +97,12 @@ jobs:
           npm ci
           sh scripts/vendor.sh
 
+      # After the page libraries, which Tauri embeds when it compiles.
+      - name: Rust tests
+        shell: bash
+        working-directory: src-tauri
+        run: cargo test
+
       - name: Stamp the version
         shell: bash
         env:

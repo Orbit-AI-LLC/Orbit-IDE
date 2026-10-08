@@ -1,11 +1,11 @@
 # Orbit IDE
 
-An offline code editor for the Mac with the AI agents you already use built
-in. Claude Code, Codex and Grok run as their real command-line tools inside
+An offline code editor for the Mac, Windows and Linux with the AI agents you
+already use built in. Claude Code, Codex and Grok run as their real command-line tools inside
 the project, so every tool and model those agents have is available with no
 limits added by the editor. OpenRouter gives a chat with any hosted model.
 
-Nothing leaves the Mac except what you send to the provider you choose.
+Nothing leaves your computer except what you send to the provider you choose.
 
 ## What is in it
 
@@ -56,7 +56,8 @@ again.
 
 ## Requirements
 
-* macOS 13 or later.
+* macOS 13 or later, Windows 10 or 11, or a 64-bit Linux (see
+  [Continuous builds and releases](#continuous-builds-and-releases)).
 * `git` (comes with the Xcode command-line tools).
 * The agents you want: `claude`, `codex` and `grok` on your PATH and signed
   in. Orbit IDE reads the PATH and environment from your login shell once,
@@ -79,7 +80,9 @@ never leaves a stale copy behind.
 The page lives in `ui/` with no bundler: plain HTML, CSS and ES modules.
 Tauri embeds `ui/` into the binary at compile time, so rebuild after editing
 the page. With `ORBIT_IDE_SELFTEST=1` the app runs a smoke test after boot
-and prints the results to the terminal that launched it.
+and prints the results to the terminal that launched it. `cargo test` in
+`src-tauri` runs the native side's tests, as the release workflow does before
+every build.
 
 ## Building the Mac app
 

@@ -1,0 +1,27 @@
+# Dependabot proposes dependency updates as pull requests, once a week.
+# Minor and patch updates are grouped into one pull request per ecosystem;
+# a major version comes on its own, since it may need changes.
+version: 2
+updates:
+  # the editor's vendored libraries (scripts/vendor.sh)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm_minor_and_patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo_minor_and_patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github_actions_minor_and_patch:
+        update-types: ["minor", "patch"]
