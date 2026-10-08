@@ -51,7 +51,7 @@
     ],
     "macOS": {
       "signingIdentity": "-",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "minimumSystemVersion": "13.0"
     },
     "windows": {

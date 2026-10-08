@@ -110,8 +110,9 @@ sh build_orbit_ide_dmg.sh
 ```
 
 This produces `src-tauri/target/release/bundle/macos/Orbit IDE.app` and
-`dist/OrbitIDE.dmg`. The app is ad-hoc signed; the first launch may need a
-right-click, Open. Arguments after the script go to `tauri build`, which is
+`dist/OrbitIDE.dmg`. A local build is ad-hoc signed; the first launch may need a
+right-click, Open. Release builds are signed with a Developer ID and notarized
+(see Continuous builds and releases). Arguments after the script go to `tauri build`, which is
 how the release workflow stamps the version.
 
 ## Updates
@@ -207,8 +208,19 @@ copies are not offered them. Replacing the key means changing `pubkey` too,
 and copies built with the old key can't verify updates signed with the new
 one: they need one manual install.
 
-The Mac build is ad-hoc signed and not notarized; the Windows build is
-unsigned. Add signing secrets to the workflow for signed builds.
+The Mac build is signed with a Developer ID, with the hardened runtime, and
+notarized when these repository secrets are set, the same in every Orbit
+repository with a Mac app. The Orbit Installer only installs a build signed
+this way:
+
+* `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`: a "Developer ID
+  Application" certificate with its private key, base64, and its password
+* `APPLE_TEAM_ID`: the Apple Developer team ID
+* `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`: an Apple ID on the team and an
+  app-specific password for `notarytool`
+
+Without them the Mac build is ad-hoc signed and not notarized, with a
+warning. The Windows build is unsigned.
 
 On Windows the agents run through `cmd.exe` so the npm-installed `claude`,
 `codex` and `grok` launchers resolve, and the terminal is PowerShell. The

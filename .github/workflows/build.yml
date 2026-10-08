@@ -12,6 +12,11 @@ name: Build and release
 #   TAURI_SIGNING_PRIVATE_KEY           the private key (`tauri signer generate`)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
 # Without them the apps are built and released as before, but not offered as updates.
+#
+# The Mac app is signed with a Developer ID and notarized when these are set,
+# which the Orbit Installer needs to install it; without them it is signed ad hoc:
+#   MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD  a "Developer ID Application" .p12, base64, and its password
+#   APPLE_TEAM_ID, NOTARY_APPLE_ID, NOTARY_PASSWORD     the team, and an Apple ID and app-specific password for notarytool
 
 on:
   push:
@@ -113,6 +118,34 @@ jobs:
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: the build is not signed for updates, so installed apps won't be offered it."
           fi
           echo "TAURI_RELEASE_CONFIG={\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":$updater}}" >> "$GITHUB_ENV"
+
+      # Tauri signs and notarizes when these are in the environment; set only
+      # when the secrets exist, so a build without them is signed ad hoc.
+      - name: Developer ID
+        if: runner.os == 'macOS'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo "::warning::The Mac app is signed ad hoc: set the MACOS_* secrets (top of .github/workflows/build.yml). The Orbit Installer only installs a Developer ID build."
+            exit 0
+          fi
+          {
+            echo "APPLE_CERTIFICATE=$CERTIFICATE"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=Developer ID Application"
+          } >> "$GITHUB_ENV"
+          if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$TEAM_ID" ]; then
+            {
+              echo "APPLE_ID=$NOTARY_APPLE_ID"
+              echo "APPLE_PASSWORD=$NOTARY_PASSWORD"
+              echo "APPLE_TEAM_ID=$TEAM_ID"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Build macOS app and DMG
         if: runner.os == 'macOS'
