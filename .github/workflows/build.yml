@@ -137,7 +137,7 @@ jobs:
             if [ -f "$sig" ]; then cp "$sig" dist/Orbit-IDE-Windows-Setup.exe.sig; fi
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Orbit-IDE-${{ matrix.name }}
           path: dist/*
@@ -193,7 +193,7 @@ jobs:
           copy "$(ls "$bundle"/deb/*.deb)" Orbit-IDE-Linux-amd64.deb
           copy "$(ls "$bundle"/rpm/*.rpm)" Orbit-IDE-Linux-x86_64.rpm
           copy "$(ls "$bundle"/appimage/*.AppImage)" Orbit-IDE-Linux-x86_64.AppImage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Orbit-IDE-Linux
           path: dist/*
