@@ -197,7 +197,7 @@ jobs:
     name: Publish release
     needs: [version, build, linux]
     # Whatever became of the Linux packages: they are attached when they built.
-    if: ${{ !cancelled() && github.event_name == 'push' && needs.version.result == 'success' && needs.build.result == 'success' }}
+    if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.version.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
