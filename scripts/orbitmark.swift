@@ -332,7 +332,7 @@ let MARKS: [String: Mark] = [
         orbiting(rocket(P(x: 512, y: 520), d == .full ? 530 : 560, window: d == .full), orbit(d) { $0.c.y = 540 })
     },
     "browser": Mark(label: "Orbit Browser", what: "a globe, its equator an orbit",
-                    tile: (hex("#3fe0cf"), hex("#0a7f8c")), ink: (hex("#24cdbf"), hex("#0b8592")), solid: hex("#12a3a6")) { d in
+                    tile: (hex("#ffb547"), hex("#f2621a")), ink: (hex("#ff9a33"), hex("#e2560a")), solid: hex("#f7802a")) { d in
         // The orbit sits low enough to cover the meridian's last loop, so the
         // globe's foot below it is one clean piece.
         let at = P(x: 512, y: 500), r: CGFloat = 258
