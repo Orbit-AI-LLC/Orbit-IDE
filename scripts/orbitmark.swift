@@ -2,26 +2,28 @@
 //
 // The Orbit apps' marks share one idea: the app's own object (a spark, an
 // envelope, a calendar page, a speech bubble, the code sign, a rocket,
-// a planet, a globe) in white on its own colour, with a tilted
-// orbit round it and a moon riding the orbit at the top right. The orbit
-// passes behind the object above and in front of it below, with a clear gap
-// wherever the two cross, so every mark reads as something in orbit. Orbit
-// IDE's and Orbit Browser's objects are drawn in line, and the orbit is part
-// of them: the code sign's slash, the globe's equator. Orbit IDE's is drawn
-// in bright cyan and violet on a dark editor's tile rather than in white.
-// Orbit Pass keeps its own mark (the flat ring, moon and keyhole on
-// black), which this file doesn't draw; Orbit Authenticator, its companion,
-// takes Pass's flat ring and moon instead of the tilted orbit: the ring is the
-// code's countdown, a quarter gone, round a shield with a check, on the app's
-// strong blue.
+// a planet, a globe, a locked phone, a monitor with a heartbeat) in white on
+// its own colour, with a tilted orbit round it and a moon riding the orbit at
+// the top right. The orbit passes behind the object above and in front of it
+// below, with a clear gap wherever the two cross, so every mark reads as
+// something in orbit. Orbit IDE's and Orbit Browser's objects are drawn in
+// line, and the orbit is part of them: the code sign's slash, the globe's
+// equator. Orbit IDE's is drawn in bright cyan and violet on a dark editor's
+// tile rather than in white. Orbit Pass keeps its own mark (the flat ring,
+// moon and keyhole on black), which this file doesn't draw; Orbit
+// Authenticator, its companion, takes Pass's flat ring and moon instead of
+// the tilted orbit: the ring is the code's countdown, a quarter gone, round a
+// shield with a check, on the app's strong blue. Orbit MDM and Orbit RMM are
+// a pair: a locked phone on teal, a monitor with a heartbeat on magenta.
 //
 // This one file is the same in every Orbit repository that ships one of
 // these marks (Orbit AI, Orbit Browser, Orbit Chat, Orbit IDE, Orbit Mail,
-// Orbit Mission Control, Orbit Pass for Orbit Authenticator, and the Orbit
-// Website), so the family is designed in one place. Each repository's
-// scripts/build_icon.py compiles it and writes that app's icons. Edit the
-// geometry or the colours here, copy the file to the other repositories, and
-// re-run their build_icon.py; never edit the outputs.
+// Orbit MDM for Orbit MDM and Orbit RMM, Orbit Mission Control, Orbit Pass
+// for Orbit Authenticator, and the Orbit Website), so the family is designed
+// in one place. Each repository's scripts/build_icon.py compiles it and
+// writes that app's icons. Edit the geometry or the colours here, copy the
+// file to the other repositories, and re-run their build_icon.py; never edit
+// the outputs.
 //
 // Build (the toolchain compiler is enough, no Xcode licence needed):
 //
@@ -36,7 +38,7 @@
 //   orbitmark path <mark> <box> <fill> [small|tiny]                 bare path data in a box-unit square
 //   orbitmark colour <mark>                                         the mark's one flat colour
 //
-//   mark     ai | mail | calendar | chat | ide | control | orbit | browser | authenticator
+//   mark     ai | mail | calendar | chat | ide | control | orbit | browser | mdm | rmm | authenticator
 //   layout   bleed    the colour square, edge to edge (iOS app icons, touch icons)
 //            mac      the macOS icon grid: an 824/1024 tile with 185/1024 corners
 //            tile     a rounded tile over the whole canvas (favicons, in-app marks)
@@ -236,6 +238,39 @@ func globe(_ c: P, _ r: CGFloat, line w: CGFloat, meridian: CGFloat, equator: Bo
     return equator ? g.union(stroked(line([P(x: c.x - inner, y: c.y), P(x: c.x + inner, y: c.y)]), w)) : g
 }
 
+/// Orbit MDM: a phone, a padlock cut into its screen, and the camera's pill
+/// at the top when there's room for it.
+func lockedPhone(_ c: P, _ w: CGFloat, _ h: CGFloat, cut: CGFloat, island: Bool) -> CGPath {
+    let x0 = c.x - w / 2, y0 = c.y - h / 2
+    var p = rrect(x0, y0, w, h, w * 0.22)
+    if island { p = p.subtracting(rrect(c.x - w * 0.15, y0 + h * 0.065, w * 0.3, cut * 0.9, cut * 0.45)) }
+    let lw = w * 0.5, lh = w * 0.4, top = c.y - h * 0.06
+    let body = rrect(c.x - lw / 2, top, lw, lh, lw * 0.16)
+    let r = lw * 0.29
+    let shackle = CGMutablePath()
+    shackle.move(to: P(x: c.x - r, y: top + cut))
+    shackle.addLine(to: P(x: c.x - r, y: top - r * 0.35))
+    shackle.addArc(center: P(x: c.x, y: top - r * 0.35), radius: r, startAngle: .pi, endAngle: 0, clockwise: false)
+    shackle.addLine(to: P(x: c.x + r, y: top + cut))
+    let lock = body.union(stroked(shackle, cut))
+    return p.subtracting(lock).union(disc(P(x: c.x, y: top + lh * 0.45), lw * 0.11))
+}
+
+/// Orbit RMM: a monitor on its stand, a heartbeat running across the screen.
+func monitorPulse(_ c: P, _ w: CGFloat, _ h: CGFloat, cut: CGFloat, pulse: Bool) -> CGPath {
+    let x0 = c.x - w / 2, y0 = c.y - h / 2
+    var screen = rrect(x0, y0, w, h, h * 0.13)
+    if pulse {
+        let mid = c.y - h * 0.05
+        let beat = line([P(x: x0 + w * 0.15, y: mid), P(x: c.x - w * 0.15, y: mid), P(x: c.x - w * 0.06, y: mid - h * 0.27),
+                         P(x: c.x + w * 0.05, y: mid + h * 0.25), P(x: c.x + w * 0.13, y: mid), P(x: x0 + w * 0.8, y: mid)])
+        screen = screen.subtracting(stroked(beat, cut))
+    }
+    let neck = CGPath(rect: CGRect(x: c.x - w * 0.075, y: y0 + h - 4, width: w * 0.15, height: h * 0.3), transform: nil)
+    let foot = rrect(c.x - w * 0.25, y0 + h * 1.25, w * 0.5, h * 0.12, h * 0.06)
+    return screen.union(neck).union(foot)
+}
+
 /// Orbit Authenticator: a shield with a check cut in.
 func shieldCheck(_ c: P, _ w: CGFloat, _ h: CGFloat, cut: CGFloat) -> CGPath {
     let x0 = c.x - w / 2, x1 = c.x + w / 2, y0 = c.y - h / 2, y1 = c.y + h / 2, r = w * 0.16
@@ -338,6 +373,16 @@ let MARKS: [String: Mark] = [
         let at = P(x: 512, y: 500), r: CGFloat = 258
         let body = globe(at, r, line: d == .full ? 56 : (d == .small ? 76 : 90), meridian: 0.46, equator: d == .tiny)
         return orbiting(body, orbit(d) { $0.c.y = 555 }, behind: disc(at, r))
+    },
+    "mdm": Mark(label: "Orbit MDM", what: "a locked phone in orbit",
+                tile: (hex("#2fe0c8"), hex("#0a7c8c")), ink: (hex("#1fcfb8"), hex("#0b7f90")), solid: hex("#14a6a6")) { d in
+        orbiting(lockedPhone(P(x: 512, y: 500), d == .full ? 300 : 330, d == .full ? 520 : 540,
+                             cut: d == .full ? 40 : 56, island: d == .full), orbit(d) { $0.c.y = 560 })
+    },
+    "rmm": Mark(label: "Orbit RMM", what: "a monitor with a heartbeat, in orbit",
+                tile: (hex("#ff7ac8"), hex("#b81f8a")), ink: (hex("#ff62be"), hex("#b8208c")), solid: hex("#de3fa8")) { d in
+        orbiting(monitorPulse(P(x: 512, y: 420), d == .full ? 540 : 570, d == .full ? 340 : 360,
+                              cut: d == .full ? 40 : 58, pulse: d != .tiny), orbit(d) { $0.c.y = 470 })
     },
     "authenticator": Mark(label: "Orbit Authenticator", what: "a shield in Orbit Pass's ring, its countdown",
                           tile: (hex("#3d8eff"), hex("#0047d6")), ink: (hex("#3d8eff"), hex("#0057e6")), solid: hex("#006fff"),
