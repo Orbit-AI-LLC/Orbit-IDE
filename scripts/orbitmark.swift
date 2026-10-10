@@ -7,10 +7,10 @@
 // the top right. The orbit passes behind the object above and in front of it
 // below, with a clear gap wherever the two cross, so every mark reads as
 // something in orbit. Orbit Browser's globe is drawn in line, its equator the
-// orbit. Orbit IDE's is the one object mark the orbit doesn't ring: a terminal
-// screen among a scatter of stars on a dark editor's tile, drawn in bright cyan
-// and violet rather than in white, its prompt and cursor cut into it. Orbit
-// Pass keeps its own mark (the flat ring,
+// orbit. Orbit IDE's is the one object mark with no orbit at all: a terminal
+// screen alone on a dark editor's tile, drawn in bright cyan and violet rather
+// than in white, its prompt and cursor cut into it. Orbit Pass keeps its own
+// mark (the flat ring,
 // moon and keyhole on black), which this file doesn't draw; Orbit
 // Authenticator, its companion, takes Pass's flat ring and moon instead of
 // the tilted orbit: the ring is the code's countdown, a quarter gone, round a
@@ -179,32 +179,21 @@ func bubble(_ c: P, _ r: CGFloat, dots: CGFloat) -> CGPath {
     return b
 }
 
-/// Orbit IDE: a terminal window among the stars. The window is a solid screen
-/// with a prompt chevron and cursor cut into it; a scatter of four-point stars
-/// around it gives the family's spacey feel without the tilted orbit the other
-/// marks carry. At 16 px the screen and prompt alone read best.
+/// Orbit IDE: a terminal window, alone. A solid screen with a prompt chevron
+/// and cursor cut into it, in bright cyan and violet on the dark editor tile.
+/// No orbit, no moon, nothing else round it.
 func terminal(_ d: Detail) -> CGPath {
     let bold = d != .full
     let c = P(x: 512, y: 512)
-    let w: CGFloat = 536, h: CGFloat = 396
+    let w: CGFloat = 584, h: CGFloat = 432
     let x0 = c.x - w / 2, y0 = c.y - h / 2
-    var win = rrect(x0, y0, w, h, bold ? 84 : 92)
+    let win = rrect(x0, y0, w, h, bold ? 90 : 98)
     // The prompt chevron and the cursor, cut into the screen.
-    let pen: CGFloat = bold ? 56 : 46
-    let hx = x0 + (bold ? 120 : 112), reach: CGFloat = 112, hh: CGFloat = 94
+    let pen: CGFloat = bold ? 60 : 50
+    let hx = x0 + (bold ? 132 : 124), reach: CGFloat = 124, hh: CGFloat = 104
     let chevron = stroked(line([P(x: hx, y: c.y - hh), P(x: hx + reach, y: c.y), P(x: hx, y: c.y + hh)]), pen)
-    let cursor = stroked(line([P(x: hx + reach + 88, y: c.y + hh), P(x: hx + reach + 240, y: c.y + hh)]), pen)
-    win = win.subtracting(chevron).subtracting(cursor)
-    if d == .tiny { return win }
-    // A scatter of stars around the screen: a few bold ones when small, a
-    // fuller field at full size, roughly balanced so the screen stays centred.
-    let field: [(CGFloat, CGFloat, CGFloat)] = bold
-        ? [(156, 232, 52), (880, 268, 46), (838, 788, 44), (214, 806, 36)]
-        : [(150, 214, 56), (322, 120, 26), (892, 250, 48), (938, 470, 22),
-           (700, 128, 20), (134, 628, 24), (360, 892, 30), (846, 808, 52), (632, 904, 22)]
-    var g = win
-    for (sx, sy, sr) in field { g = g.union(spark(P(x: sx, y: sy), sr)) }
-    return g
+    let cursor = stroked(line([P(x: hx + reach + 96, y: c.y + hh), P(x: hx + reach + 264, y: c.y + hh)]), pen)
+    return win.subtracting(chevron).subtracting(cursor)
 }
 
 /// Orbit Mission Control: a rocket climbing to the right.
@@ -376,7 +365,7 @@ let MARKS: [String: Mark] = [
                  tile: (hex("#4be38f"), hex("#0fa35a")), ink: (hex("#2fd27a"), hex("#0e9e57")), solid: hex("#16b765")) { d in
         orbiting(bubble(P(x: 512, y: 490), d == .full ? 250 : 270, dots: d == .tiny ? 0 : (d == .full ? 0.13 : 0.16)), orbit(d) { $0.c.y = 500 })
     },
-    "ide": Mark(label: "Orbit IDE", what: "a terminal window among the stars",
+    "ide": Mark(label: "Orbit IDE", what: "a terminal window",
                 tile: (hex("#1c2540"), hex("#090d1a")), ink: (hex("#5bd4f5"), hex("#9a86ff")), solid: hex("#6f8cf0"),
                 onTile: (hex("#5bd4f5"), hex("#9a86ff")), glyph: terminal),
     "control": Mark(label: "Orbit Mission Control", what: "a rocket in orbit",
