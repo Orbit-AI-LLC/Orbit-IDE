@@ -2,9 +2,9 @@
 
     python3 scripts/build_icon.py
 
-The mark is a terminal window in orbit: a screen with its prompt and cursor,
-in bright cyan and violet on Orbit IDE's dark editor tile, with the Orbit
-family's tilted orbit and moon round it. The geometry and colours live in
+The mark is a terminal window among the stars: a screen with its prompt and
+cursor, in bright cyan and violet on Orbit IDE's dark editor tile, a scatter
+of stars round it in place of the family's orbit. The geometry and colours live in
 ``scripts/orbitmark.swift``, the family renderer every Orbit app shares. This
 compiles it with the Xcode toolchain's ``swiftc`` (no Xcode licence needed),
 renders each size, and writes:

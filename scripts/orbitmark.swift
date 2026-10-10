@@ -7,9 +7,10 @@
 // the top right. The orbit passes behind the object above and in front of it
 // below, with a clear gap wherever the two cross, so every mark reads as
 // something in orbit. Orbit Browser's globe is drawn in line, its equator the
-// orbit. Orbit IDE's is a terminal screen on a dark editor's tile, drawn in
-// bright cyan and violet rather than in white, its prompt and cursor cut into
-// it. Orbit Pass keeps its own mark (the flat ring,
+// orbit. Orbit IDE's is the one object mark the orbit doesn't ring: a terminal
+// screen among a scatter of stars on a dark editor's tile, drawn in bright cyan
+// and violet rather than in white, its prompt and cursor cut into it. Orbit
+// Pass keeps its own mark (the flat ring,
 // moon and keyhole on black), which this file doesn't draw; Orbit
 // Authenticator, its companion, takes Pass's flat ring and moon instead of
 // the tilted orbit: the ring is the code's countdown, a quarter gone, round a
@@ -178,30 +179,32 @@ func bubble(_ c: P, _ r: CGFloat, dots: CGFloat) -> CGPath {
     return b
 }
 
-/// Orbit IDE: a terminal window in orbit. The window is a solid screen with a
-/// title bar divided off and a prompt chevron and cursor cut into it, so it
-/// reads as an editor even when the orbit crosses in front of its foot. The
-/// moon rides the orbit at the top right. At 16 px the screen and prompt alone,
-/// without the orbit, read best.
+/// Orbit IDE: a terminal window among the stars. The window is a solid screen
+/// with a prompt chevron and cursor cut into it; a scatter of four-point stars
+/// around it gives the family's spacey feel without the tilted orbit the other
+/// marks carry. At 16 px the screen and prompt alone read best.
 func terminal(_ d: Detail) -> CGPath {
     let bold = d != .full
-    let c = P(x: 512, y: 520)
-    let w: CGFloat = 560, h: CGFloat = 432
+    let c = P(x: 512, y: 512)
+    let w: CGFloat = 536, h: CGFloat = 396
     let x0 = c.x - w / 2, y0 = c.y - h / 2
-    var win = rrect(x0, y0, w, h, bold ? 86 : 94)
-    // The title bar: a slot across the window, held in by a margin each side.
-    let barY = y0 + (bold ? 132 : 124), slot: CGFloat = bold ? 30 : 24, margin: CGFloat = 66
-    win = win.subtracting(rrect(x0 + margin, barY - slot / 2, w - 2 * margin, slot, slot / 2))
-    // The prompt chevron and the cursor, cut into the first line below the bar,
-    // high enough that the orbit crosses the clear body beneath them.
-    let pen: CGFloat = bold ? 54 : 44
-    let py = barY + (bold ? 112 : 118)
-    let hx = x0 + 128, reach: CGFloat = 104, hh: CGFloat = 78
-    let chevron = stroked(line([P(x: hx, y: py - hh), P(x: hx + reach, y: py), P(x: hx, y: py + hh)]), pen)
-    let cursor = stroked(line([P(x: hx + reach + 86, y: py + hh), P(x: hx + reach + 238, y: py + hh)]), pen)
+    var win = rrect(x0, y0, w, h, bold ? 84 : 92)
+    // The prompt chevron and the cursor, cut into the screen.
+    let pen: CGFloat = bold ? 56 : 46
+    let hx = x0 + (bold ? 120 : 112), reach: CGFloat = 112, hh: CGFloat = 94
+    let chevron = stroked(line([P(x: hx, y: c.y - hh), P(x: hx + reach, y: c.y), P(x: hx, y: c.y + hh)]), pen)
+    let cursor = stroked(line([P(x: hx + reach + 88, y: c.y + hh), P(x: hx + reach + 240, y: c.y + hh)]), pen)
     win = win.subtracting(chevron).subtracting(cursor)
     if d == .tiny { return win }
-    return orbiting(win, orbit(d) { $0.c.y = 500 })
+    // A scatter of stars around the screen: a few bold ones when small, a
+    // fuller field at full size, roughly balanced so the screen stays centred.
+    let field: [(CGFloat, CGFloat, CGFloat)] = bold
+        ? [(156, 232, 52), (880, 268, 46), (838, 788, 44), (214, 806, 36)]
+        : [(150, 214, 56), (322, 120, 26), (892, 250, 48), (938, 470, 22),
+           (700, 128, 20), (134, 628, 24), (360, 892, 30), (846, 808, 52), (632, 904, 22)]
+    var g = win
+    for (sx, sy, sr) in field { g = g.union(spark(P(x: sx, y: sy), sr)) }
+    return g
 }
 
 /// Orbit Mission Control: a rocket climbing to the right.
@@ -373,7 +376,7 @@ let MARKS: [String: Mark] = [
                  tile: (hex("#4be38f"), hex("#0fa35a")), ink: (hex("#2fd27a"), hex("#0e9e57")), solid: hex("#16b765")) { d in
         orbiting(bubble(P(x: 512, y: 490), d == .full ? 250 : 270, dots: d == .tiny ? 0 : (d == .full ? 0.13 : 0.16)), orbit(d) { $0.c.y = 500 })
     },
-    "ide": Mark(label: "Orbit IDE", what: "a terminal window in orbit",
+    "ide": Mark(label: "Orbit IDE", what: "a terminal window among the stars",
                 tile: (hex("#1c2540"), hex("#090d1a")), ink: (hex("#5bd4f5"), hex("#9a86ff")), solid: hex("#6f8cf0"),
                 onTile: (hex("#5bd4f5"), hex("#9a86ff")), glyph: terminal),
     "control": Mark(label: "Orbit Mission Control", what: "a rocket in orbit",
@@ -381,7 +384,7 @@ let MARKS: [String: Mark] = [
         orbiting(rocket(P(x: 512, y: 520), d == .full ? 530 : 560, window: d == .full), orbit(d) { $0.c.y = 540 })
     },
     "browser": Mark(label: "Orbit Browser", what: "a globe, its equator an orbit",
-                    tile: (hex("#37c6ff"), hex("#1466e0")), ink: (hex("#3fb0ff"), hex("#1f66ea")), solid: hex("#1f86f0")) { d in
+                    tile: (hex("#b07cff"), hex("#e0379a")), ink: (hex("#b98cff"), hex("#dc4aa0")), solid: hex("#c74fc0")) { d in
         // The orbit sits low enough to cover the meridian's last loop, so the
         // globe's foot below it is one clean piece. Latitude rings fill the
         // globe at full size; smaller, the rim and meridian carry it alone.
