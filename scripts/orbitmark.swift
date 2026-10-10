@@ -1,15 +1,15 @@
 // Orbit family mark renderer.
 //
 // The Orbit apps' marks share one idea: the app's own object (a spark, an
-// envelope, a calendar page, a speech bubble, the code sign, a rocket,
+// envelope, a calendar page, a speech bubble, a terminal window, a rocket,
 // a planet, a globe, a locked phone, a monitor with a heartbeat) in white on
 // its own colour, with a tilted orbit round it and a moon riding the orbit at
 // the top right. The orbit passes behind the object above and in front of it
 // below, with a clear gap wherever the two cross, so every mark reads as
-// something in orbit. Orbit IDE's and Orbit Browser's objects are drawn in
-// line, and the orbit is part of them: the code sign's slash, the globe's
-// equator. Orbit IDE's is drawn in bright cyan and violet on a dark editor's
-// tile rather than in white. Orbit Pass keeps its own mark (the flat ring,
+// something in orbit. Orbit Browser's globe is drawn in line, its equator the
+// orbit. Orbit IDE's is a terminal screen on a dark editor's tile, drawn in
+// bright cyan and violet rather than in white, its prompt and cursor cut into
+// it. Orbit Pass keeps its own mark (the flat ring,
 // moon and keyhole on black), which this file doesn't draw; Orbit
 // Authenticator, its companion, takes Pass's flat ring and moon instead of
 // the tilted orbit: the ring is the code's countdown, a quarter gone, round a
@@ -178,23 +178,30 @@ func bubble(_ c: P, _ r: CGFloat, dots: CGFloat) -> CGPath {
     return b
 }
 
-/// Orbit IDE: the code sign, </>, whose slash is an orbit, steep and wide
-/// enough to read as one, round a small planet, with the moon at its top. At
-/// 16 px a plain slash reads better.
-func codeSign(_ d: Detail) -> CGPath {
+/// Orbit IDE: a terminal window in orbit. The window is a solid screen with a
+/// title bar divided off and a prompt chevron and cursor cut into it, so it
+/// reads as an editor even when the orbit crosses in front of its foot. The
+/// moon rides the orbit at the top right. At 16 px the screen and prompt alone,
+/// without the orbit, read best.
+func terminal(_ d: Detail) -> CGPath {
     let bold = d != .full
-    let weight: CGFloat = bold ? 80 : 66
-    let gap: CGFloat = 240, h: CGFloat = 165, reach: CGFloat = 118
-    let left = line([P(x: 512 - gap, y: 512 - h), P(x: 512 - gap - reach, y: 512), P(x: 512 - gap, y: 512 + h)])
-    let right = line([P(x: 512 + gap, y: 512 - h), P(x: 512 + gap + reach, y: 512), P(x: 512 + gap, y: 512 + h)])
-    let brackets = stroked(left, weight).union(stroked(right, weight))
-    if d == .tiny {
-        return brackets.union(stroked(line([P(x: 560, y: 330), P(x: 464, y: 694)]), weight))
-    }
-    var slash = Orbit()
-    slash.rx = 330; slash.ry = 112; slash.tilt = -66; slash.w = 48; slash.moonR = 54; slash.moonAt = -10; slash.gap = 24
-    if bold { slash.w = 64; slash.moonR = 64; slash.gap = 28 }
-    return orbiting(brackets.union(disc(centre, bold ? 66 : 60)), slash)
+    let c = P(x: 512, y: 520)
+    let w: CGFloat = 560, h: CGFloat = 432
+    let x0 = c.x - w / 2, y0 = c.y - h / 2
+    var win = rrect(x0, y0, w, h, bold ? 86 : 94)
+    // The title bar: a slot across the window, held in by a margin each side.
+    let barY = y0 + (bold ? 132 : 124), slot: CGFloat = bold ? 30 : 24, margin: CGFloat = 66
+    win = win.subtracting(rrect(x0 + margin, barY - slot / 2, w - 2 * margin, slot, slot / 2))
+    // The prompt chevron and the cursor, cut into the first line below the bar,
+    // high enough that the orbit crosses the clear body beneath them.
+    let pen: CGFloat = bold ? 54 : 44
+    let py = barY + (bold ? 112 : 118)
+    let hx = x0 + 128, reach: CGFloat = 104, hh: CGFloat = 78
+    let chevron = stroked(line([P(x: hx, y: py - hh), P(x: hx + reach, y: py), P(x: hx, y: py + hh)]), pen)
+    let cursor = stroked(line([P(x: hx + reach + 86, y: py + hh), P(x: hx + reach + 238, y: py + hh)]), pen)
+    win = win.subtracting(chevron).subtracting(cursor)
+    if d == .tiny { return win }
+    return orbiting(win, orbit(d) { $0.c.y = 500 })
 }
 
 /// Orbit Mission Control: a rocket climbing to the right.
@@ -229,12 +236,19 @@ func rocket(_ c: P, _ s: CGFloat, window: Bool) -> CGPath {
 /// Orbit Browser: a globe, drawn in line: its rim and one meridian, the
 /// meridian `meridian` of the globe's width. The orbit is its equator; at
 /// 16 px, without the orbit, it draws an equator of its own.
-func globe(_ c: P, _ r: CGFloat, line w: CGFloat, meridian: CGFloat, equator: Bool) -> CGPath {
+func globe(_ c: P, _ r: CGFloat, line w: CGFloat, meridian: CGFloat, equator: Bool, parallels: Bool = false) -> CGPath {
     let inner = r - w / 2
     func upright(_ rx: CGFloat) -> CGPath {
         stroked(CGPath(ellipseIn: CGRect(x: c.x - rx, y: c.y - inner, width: 2 * rx, height: 2 * inner), transform: nil), w)
     }
-    let g = upright(inner).union(upright(inner * meridian))
+    var g = upright(inner).union(upright(inner * meridian))
+    // Two latitude rings, each a thin ellipse spanning the sphere at its height,
+    // so the rim and meridian read as a globe even before the orbit's equator.
+    if parallels {
+        let dy = -inner * 0.5
+        let rx = (inner * inner - dy * dy).squareRoot()
+        g = g.union(stroked(CGPath(ellipseIn: CGRect(x: c.x - rx, y: c.y + dy - inner * 0.1, width: 2 * rx, height: inner * 0.2), transform: nil), w))
+    }
     return equator ? g.union(stroked(line([P(x: c.x - inner, y: c.y), P(x: c.x + inner, y: c.y)]), w)) : g
 }
 
@@ -359,19 +373,21 @@ let MARKS: [String: Mark] = [
                  tile: (hex("#4be38f"), hex("#0fa35a")), ink: (hex("#2fd27a"), hex("#0e9e57")), solid: hex("#16b765")) { d in
         orbiting(bubble(P(x: 512, y: 490), d == .full ? 250 : 270, dots: d == .tiny ? 0 : (d == .full ? 0.13 : 0.16)), orbit(d) { $0.c.y = 500 })
     },
-    "ide": Mark(label: "Orbit IDE", what: "the code sign, its slash an orbit",
-                tile: (hex("#26335f"), hex("#0b1020")), ink: (hex("#38c4ea"), hex("#7466f2")), solid: hex("#5b8def"),
-                onTile: (hex("#6ee7f9"), hex("#8b7cf8")), glyph: codeSign),
+    "ide": Mark(label: "Orbit IDE", what: "a terminal window in orbit",
+                tile: (hex("#1c2540"), hex("#090d1a")), ink: (hex("#5bd4f5"), hex("#9a86ff")), solid: hex("#6f8cf0"),
+                onTile: (hex("#5bd4f5"), hex("#9a86ff")), glyph: terminal),
     "control": Mark(label: "Orbit Mission Control", what: "a rocket in orbit",
                     tile: (hex("#3b4fc4"), hex("#141b4d")), ink: (hex("#6f7dff"), hex("#3a45d1")), solid: hex("#3d4fd6")) { d in
         orbiting(rocket(P(x: 512, y: 520), d == .full ? 530 : 560, window: d == .full), orbit(d) { $0.c.y = 540 })
     },
     "browser": Mark(label: "Orbit Browser", what: "a globe, its equator an orbit",
-                    tile: (hex("#ffb547"), hex("#f2621a")), ink: (hex("#ff9a33"), hex("#e2560a")), solid: hex("#f7802a")) { d in
+                    tile: (hex("#37c6ff"), hex("#1466e0")), ink: (hex("#3fb0ff"), hex("#1f66ea")), solid: hex("#1f86f0")) { d in
         // The orbit sits low enough to cover the meridian's last loop, so the
-        // globe's foot below it is one clean piece.
-        let at = P(x: 512, y: 500), r: CGFloat = 258
-        let body = globe(at, r, line: d == .full ? 56 : (d == .small ? 76 : 90), meridian: 0.46, equator: d == .tiny)
+        // globe's foot below it is one clean piece. Latitude rings fill the
+        // globe at full size; smaller, the rim and meridian carry it alone.
+        let at = P(x: 512, y: 500), r: CGFloat = 262
+        let body = globe(at, r, line: d == .full ? 54 : (d == .small ? 76 : 90), meridian: 0.46,
+                         equator: d == .tiny, parallels: d == .full)
         return orbiting(body, orbit(d) { $0.c.y = 555 }, behind: disc(at, r))
     },
     "mdm": Mark(label: "Orbit MDM", what: "a locked phone in orbit",

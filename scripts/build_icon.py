@@ -2,17 +2,17 @@
 
     python3 scripts/build_icon.py
 
-The mark is a terminal window in orbit: a white window with its prompt and
-cursor, with the Orbit family's tilted orbit and moon round it, on Orbit
-IDE's orange. The geometry and colours live in ``scripts/orbitmark.swift``,
-the family renderer every Orbit app shares. This compiles it with the Xcode
-toolchain's ``swiftc`` (no Xcode licence needed), renders each size, and
-writes:
+The mark is a terminal window in orbit: a screen with its prompt and cursor,
+in bright cyan and violet on Orbit IDE's dark editor tile, with the Orbit
+family's tilted orbit and moon round it. The geometry and colours live in
+``scripts/orbitmark.swift``, the family renderer every Orbit app shares. This
+compiles it with the Xcode toolchain's ``swiftc`` (no Xcode licence needed),
+renders each size, and writes:
 
 * src-tauri/icons/*.png, icon.icns, icon.ico, icon.png (the macOS set
-  ``cargo tauri build`` bundles: the mark on the orange macOS icon tile)
+  ``cargo tauri build`` bundles: the mark on the dark macOS icon tile)
 * src-tauri/icons/orbit-ide.svg (the macOS tile at 1024)
-* ui/mark.svg (the in-app mark, the orange tile with the bolder small-size
+* ui/mark.svg (the in-app mark, the dark tile with the bolder small-size
   mark) and ui/logo.svg (the bare mark in its own colours)
 
 Edit the geometry and re-run; never hand-edit the outputs.
