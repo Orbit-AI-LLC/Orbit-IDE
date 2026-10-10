@@ -228,19 +228,12 @@ func rocket(_ c: P, _ s: CGFloat, window: Bool) -> CGPath {
 /// Orbit Browser: a globe, drawn in line: its rim and one meridian, the
 /// meridian `meridian` of the globe's width. The orbit is its equator; at
 /// 16 px, without the orbit, it draws an equator of its own.
-func globe(_ c: P, _ r: CGFloat, line w: CGFloat, meridian: CGFloat, equator: Bool, parallels: Bool = false) -> CGPath {
+func globe(_ c: P, _ r: CGFloat, line w: CGFloat, meridian: CGFloat, equator: Bool) -> CGPath {
     let inner = r - w / 2
     func upright(_ rx: CGFloat) -> CGPath {
         stroked(CGPath(ellipseIn: CGRect(x: c.x - rx, y: c.y - inner, width: 2 * rx, height: 2 * inner), transform: nil), w)
     }
-    var g = upright(inner).union(upright(inner * meridian))
-    // Two latitude rings, each a thin ellipse spanning the sphere at its height,
-    // so the rim and meridian read as a globe even before the orbit's equator.
-    if parallels {
-        let dy = -inner * 0.5
-        let rx = (inner * inner - dy * dy).squareRoot()
-        g = g.union(stroked(CGPath(ellipseIn: CGRect(x: c.x - rx, y: c.y + dy - inner * 0.1, width: 2 * rx, height: inner * 0.2), transform: nil), w))
-    }
+    let g = upright(inner).union(upright(inner * meridian))
     return equator ? g.union(stroked(line([P(x: c.x - inner, y: c.y), P(x: c.x + inner, y: c.y)]), w)) : g
 }
 
@@ -375,11 +368,10 @@ let MARKS: [String: Mark] = [
     "browser": Mark(label: "Orbit Browser", what: "a globe, its equator an orbit",
                     tile: (hex("#b07cff"), hex("#e0379a")), ink: (hex("#b98cff"), hex("#dc4aa0")), solid: hex("#c74fc0")) { d in
         // The orbit sits low enough to cover the meridian's last loop, so the
-        // globe's foot below it is one clean piece. Latitude rings fill the
-        // globe at full size; smaller, the rim and meridian carry it alone.
+        // globe's foot below it is one clean piece.
         let at = P(x: 512, y: 500), r: CGFloat = 262
         let body = globe(at, r, line: d == .full ? 54 : (d == .small ? 76 : 90), meridian: 0.46,
-                         equator: d == .tiny, parallels: d == .full)
+                         equator: d == .tiny)
         return orbiting(body, orbit(d) { $0.c.y = 555 }, behind: disc(at, r))
     },
     "mdm": Mark(label: "Orbit MDM", what: "a locked phone in orbit",

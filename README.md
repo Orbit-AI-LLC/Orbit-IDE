@@ -54,14 +54,26 @@ Nothing leaves your computer except what you send to the provider you choose.
   is `.cache/clangd` in the project).
 * **Terminal** (`Cmd+J`): login shells in the project folder.
 * **AI dock** (`Cmd+Shift+A`), one tab per provider:
-  * Claude, Codex and Grok each run in a terminal in the project folder,
-    exactly as from Terminal.app. Start fresh or continue the last session.
-    A model and extra command-line arguments can be set per provider.
-  * With Claude Code installed, the dock opens on the Claude tab and its
-    agents page (`claude agents`), which lists every background session.
-    The session you open there is remembered for the project: next time the
-    project opens, Orbit IDE goes straight back to it (`claude attach`), and
-    ← returns to the agents page.
+  * Orbit AI (the first tab), Claude, Codex and Grok each run in a terminal in
+    the project folder, exactly as from Terminal.app. Start fresh or continue
+    the last session. A model and extra command-line arguments can be set per
+    provider.
+  * Orbit AI is Orbit's own CLI, signed in with your Orbit account. If it
+    isn't installed, its tab has an **Install** button. On Linux it runs
+    `curl -fsSL https://orbit.com.ai/install.sh | sh` in the tab and checks for
+    the CLI again when it finishes. On the Mac and Windows the build is a
+    download, so the button opens the installer page at
+    `https://orbit.com.ai/download/installer/`; install it, then **Check
+    again**. It works the same way as Claude and Codex, and other tools can use
+    the same models through the Orbit AI API.
+  * The dock remembers the tab each project was last left on: open a project,
+    or relaunch Orbit IDE, and it returns to Orbit AI, Claude, Codex or
+    wherever you were working.
+  * With Claude Code installed, its tab opens on the agents page
+    (`claude agents`), which lists every background session. The session you
+    open there is remembered for the project: next time the project opens,
+    Orbit IDE goes straight back to it (`claude attach`), and ← returns to the
+    agents page.
   * OpenRouter is a streaming chat. The open file or selection can be
     attached as context, and code blocks can be copied or inserted at the
     cursor.

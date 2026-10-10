@@ -84,9 +84,9 @@ pub fn login_path() -> &'static str {
         if let Some(home) = home {
             let home = home.to_string_lossy();
             let extras: Vec<String> = if cfg!(windows) {
-                vec![format!("{home}\\.local\\bin"), format!("{home}\\.grok\\bin"), format!("{home}\\AppData\\Roaming\\npm"), format!("{home}\\.cargo\\bin")]
+                vec![format!("{home}\\.orbit\\bin"), format!("{home}\\.local\\bin"), format!("{home}\\.grok\\bin"), format!("{home}\\AppData\\Roaming\\npm"), format!("{home}\\.cargo\\bin")]
             } else {
-                vec![format!("{home}/.local/bin"), format!("{home}/.grok/bin"), format!("{home}/.codex/bin"), format!("{home}/.cargo/bin")]
+                vec![format!("{home}/.orbit/bin"), format!("{home}/.local/bin"), format!("{home}/.grok/bin"), format!("{home}/.codex/bin"), format!("{home}/.cargo/bin")]
             };
             for extra in extras {
                 if !parts.contains(&extra) {

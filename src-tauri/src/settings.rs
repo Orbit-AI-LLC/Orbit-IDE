@@ -44,9 +44,11 @@ pub struct Settings {
     pub active_project: Option<String>,
     pub openrouter_api_key: String,
     pub openrouter_model: String,
+    pub orbit_model: String,
     pub claude_model: String,
     pub codex_model: String,
     pub grok_model: String,
+    pub orbit_args: String,
     pub claude_args: String,
     pub codex_args: String,
     pub grok_args: String,
@@ -55,6 +57,9 @@ pub struct Settings {
     /// The Claude Code background session each project was last in, by
     /// project path. The value is the short id `claude attach` takes.
     pub claude_sessions: BTreeMap<String, String>,
+    /// Which AI dock tab each project was last left on, by project path, so a
+    /// relaunch or project switch returns to Orbit AI, Claude, Codex, etc.
+    pub ai_tabs: BTreeMap<String, String>,
     pub font_size: u32,
     pub tab_size: u32,
     pub word_wrap: bool,
@@ -73,9 +78,11 @@ impl Default for Settings {
             active_project: None,
             openrouter_api_key: String::new(),
             openrouter_model: "anthropic/claude-sonnet-4.5".to_string(),
+            orbit_model: String::new(),
             claude_model: String::new(),
             codex_model: String::new(),
             grok_model: String::new(),
+            orbit_args: String::new(),
             claude_args: String::new(),
             codex_args: String::new(),
             grok_args: String::new(),
@@ -83,6 +90,7 @@ impl Default for Settings {
             // Empty means the default above, so improvements to it reach existing installs.
             commit_instructions: String::new(),
             claude_sessions: BTreeMap::new(),
+            ai_tabs: BTreeMap::new(),
             font_size: 13,
             tab_size: 4,
             word_wrap: false,
@@ -143,6 +151,15 @@ pub fn migrate_paths(settings: &mut Settings, resolve: impl Fn(&str) -> String) 
         }
     }
     settings.claude_sessions = sessions;
+    let mut tabs = BTreeMap::new();
+    for (path, tab) in std::mem::take(&mut settings.ai_tabs) {
+        let key = resolve(&path);
+        changed |= key != path;
+        if key == path || !tabs.contains_key(&key) {
+            tabs.insert(key, tab);
+        }
+    }
+    settings.ai_tabs = tabs;
     changed
 }
 

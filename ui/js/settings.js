@@ -68,9 +68,10 @@ export function openSettings(page = "general") {
   const refreshStatus = () => { status.textContent = state.providers.map((p) => `${p.name}: ${p.available ? "ready" : "not set up"}`).join("  ·  "); };
   refreshStatus();
   pages.providers = el("div", { class: "settings-page" }, [
-    el("p", { text: "Claude, Codex and Grok run through their command-line tools, with whatever account and tools those have. Sign in to each from a terminal once." }),
+    el("p", { text: "Orbit AI, Claude, Codex and Grok run through their command-line tools, with whatever account and tools those have. Sign in to each from a terminal once; Orbit AI can be installed from its tab in the dock." }),
     status,
     el("button", { class: "btn", text: "Check tools again", onclick: async () => { await refreshProviders(); refreshStatus(); } }),
+    providerBlock("Orbit AI", "orbit", "Started as: orbit [--model …] [extra arguments]. Signs in with your Orbit account; run `orbit login` once, or install it from the Orbit AI tab."),
     providerBlock("Claude Code", "claude", "Started as: claude [--model …] [extra arguments]. Use --continue from the dock to resume."),
     providerBlock("Codex", "codex", "Started as: codex [-m …] [extra arguments]."),
     providerBlock("Grok", "grok", "Started as: grok [-m …] [extra arguments]."),

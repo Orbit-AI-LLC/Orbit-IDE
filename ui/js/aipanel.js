@@ -8,7 +8,13 @@ import { Term } from "./terminal.js";
 import { getActiveFile, getActiveContent, getSelectionText, insertAtCursor } from "./editor.js";
 import { openSettings } from "./settings.js";
 
+// Linux installs Orbit AI with the shell script, run in a terminal. The Mac
+// and Windows build is a downloaded app, so there the Install button opens the
+// installer page in the browser instead.
+const PLATFORM = /^Win/i.test(navigator.platform) ? "windows" : /^Mac/.test(navigator.platform) ? "macos" : "linux";
+
 const PROVIDERS = [
+  { id: "orbit", name: "Orbit AI", cli: "orbit", blurb: "Orbit AI with all of its tools, running in this project. Signs in with your Orbit account.", continueArgs: ["--continue"], modelFlag: "--model", settingsKey: "orbit", install: "curl -fsSL https://orbit.com.ai/install.sh | sh", installUrl: "https://orbit.com.ai/download/installer/" },
   { id: "claude", name: "Claude", cli: "claude", blurb: "Claude Code with all of its tools, running in this project.", continueArgs: ["--continue"], modelFlag: "--model", settingsKey: "claude" },
   { id: "codex", name: "Codex", cli: "codex", blurb: "OpenAI Codex with all of its tools, running in this project.", continueArgs: ["resume", "--last"], modelFlag: "-m", settingsKey: "codex" },
   { id: "grok", name: "Grok", cli: "grok", blurb: "Grok Build with all of its tools, running in this project.", continueArgs: ["--continue"], modelFlag: "-m", settingsKey: "grok" },
@@ -50,9 +56,19 @@ export function isAiDockOpen() {
 function currentTab() {
   const v = view();
   if (v && v.aiTab) return v.aiTab;
-  // With Claude Code installed the dock opens on its agents page.
-  const claude = provider("claude");
-  return claude && claude.available ? "claude" : state.settings.commit_provider || "claude";
+  // Remember the tab the project was last left on, across relaunches and
+  // project switches; otherwise open on Orbit AI, the first tab.
+  const saved = v && (state.settings.ai_tabs || {})[v.path];
+  if (saved && PROVIDERS.some((p) => p.id === saved)) { if (v) v.aiTab = saved; return saved; }
+  return "orbit";
+}
+
+/// Remember, per project, which AI tab was last open, so a relaunch or a
+/// project switch comes back to Claude, Codex or wherever you were working.
+function rememberTab(path, id) {
+  const tabs = state.settings.ai_tabs || {};
+  if ((tabs[path] || null) === id) return;
+  saveSettings({ ai_tabs: { ...tabs, [path]: id } });
 }
 
 export function renderAll() {
@@ -70,7 +86,7 @@ function renderTabs() {
     const tab = el("button", { class: `ai-tab ${p.id === active ? "active" : ""} ${running ? "running" : ""} ${info && !info.available ? "missing" : ""}`, title: info ? info.detail : "" }, [
       el("span", { class: "dot" }), el("span", { text: p.name }),
     ]);
-    tab.addEventListener("click", () => { if (v) v.aiTab = p.id; renderAll(); });
+    tab.addEventListener("click", () => { if (v) { v.aiTab = p.id; rememberTab(v.path, p.id); } renderAll(); });
     tabsEl.append(tab);
   }
 }
@@ -137,9 +153,33 @@ function renderBody() {
       el("button", { class: "btn", text: "Continue last session", disabled: !info.available, onclick: () => startAgent(p, p.continueArgs) }),
       el("button", { class: "btn", text: "Settings", onclick: () => openSettings("providers") }),
     ]),
+    !info.available && (p.install || p.installUrl) ? el("button", { class: "btn primary", text: `Install ${p.name}`, onclick: () => installCli(p, v) }) : null,
     !info.available ? el("button", { class: "btn", text: "Check again", onclick: () => refreshProviders() }) : null,
   ])]);
   bodyEl.append(start);
+}
+
+/// Install a provider's CLI (Orbit AI) by running its installer in a terminal
+/// in the tab, then re-checking whether it is now on the PATH.
+async function installCli(p, v = view()) {
+  if (!v) return;
+  // Linux runs the shell installer in a terminal; the Mac and Windows build is
+  // a downloaded app, so open its installer page in the browser instead.
+  if (PLATFORM !== "linux" || !p.install) {
+    if (p.installUrl) api.openExternal(p.installUrl).catch(() => {});
+    return;
+  }
+  const old = v.agents[p.id];
+  if (old) { old.dispose(); delete v.agents[p.id]; }
+  const term = new Term({ cwd: v.path, program: "sh", args: ["-lc", p.install], host: bodyEl, onExit: async (code) => {
+    term.exitCode = code;
+    await refreshProviders();
+    if (view() === v && currentTab() === p.id) renderAll(); else renderTabs();
+  } });
+  term.install = true;
+  v.agents[p.id] = term;
+  if (view() === v) renderAll(); else term.el.hidden = true;
+  try { await term.start(); if (view() === v && currentTab() === p.id) term.focus(); } catch { /* shown in the terminal */ }
 }
 
 function closeAgent(v, id) {
