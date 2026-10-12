@@ -8,13 +8,14 @@ import { Term } from "./terminal.js";
 import { getActiveFile, getActiveContent, getSelectionText, insertAtCursor } from "./editor.js";
 import { openSettings } from "./settings.js";
 
-// Linux installs Orbit AI with the shell script, run in a terminal. The Mac
-// and Windows build is a downloaded app, so there the Install button opens the
-// installer page in the browser instead.
+// The `orbit` CLI ships prebuilt for macOS and Linux, so there the Install
+// button runs the shell installer in a terminal (it drops the binary in
+// ~/.orbit/bin and puts that on PATH). Windows has no CLI build yet, so there
+// the button opens the CLI page in the browser instead.
 const PLATFORM = /^Win/i.test(navigator.platform) ? "windows" : /^Mac/.test(navigator.platform) ? "macos" : "linux";
 
 const PROVIDERS = [
-  { id: "orbit", name: "Orbit AI", cli: "orbit", blurb: "Orbit AI with all of its tools, running in this project. Signs in with your Orbit account.", continueArgs: ["--continue"], modelFlag: "--model", settingsKey: "orbit", install: "curl -fsSL https://orbit.com.ai/install.sh | sh", installUrl: "https://orbit.com.ai/download/installer/" },
+  { id: "orbit", name: "Orbit AI", cli: "orbit", blurb: "Orbit AI with all of its tools, running in this project. Signs in with your Orbit account.", continueArgs: ["--continue"], modelFlag: "--model", settingsKey: "orbit", install: "curl -fsSL https://orbit.com.ai/install.sh | sh", installUrl: "https://orbit.com.ai/cli/" },
   { id: "claude", name: "Claude", cli: "claude", blurb: "Claude Code with all of its tools, running in this project.", continueArgs: ["--continue"], modelFlag: "--model", settingsKey: "claude" },
   { id: "codex", name: "Codex", cli: "codex", blurb: "OpenAI Codex with all of its tools, running in this project.", continueArgs: ["resume", "--last"], modelFlag: "-m", settingsKey: "codex" },
   { id: "grok", name: "Grok", cli: "grok", blurb: "Grok Build with all of its tools, running in this project.", continueArgs: ["--continue"], modelFlag: "-m", settingsKey: "grok" },
@@ -163,9 +164,9 @@ function renderBody() {
 /// in the tab, then re-checking whether it is now on the PATH.
 async function installCli(p, v = view()) {
   if (!v) return;
-  // Linux runs the shell installer in a terminal; the Mac and Windows build is
-  // a downloaded app, so open its installer page in the browser instead.
-  if (PLATFORM !== "linux" || !p.install) {
+  // macOS and Linux run the shell installer in a terminal; Windows has no CLI
+  // build yet, so open its CLI page in the browser instead.
+  if (PLATFORM === "windows" || !p.install) {
     if (p.installUrl) api.openExternal(p.installUrl).catch(() => {});
     return;
   }

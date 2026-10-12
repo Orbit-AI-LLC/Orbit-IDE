@@ -43,15 +43,15 @@ pub fn providers(settings: &Settings) -> Vec<Provider> {
             detail: path.unwrap_or_else(|| format!("`{binary}` is not on your PATH. Install the CLI and sign in from a terminal.")),
         }
     };
-    // Orbit AI's own CLI, signed in with your Orbit account, comes first. Linux
-    // installs it with the shell script; the Mac and Windows build is a
-    // download, so there we point at the installer page.
+    // Orbit AI's own CLI, signed in with your Orbit account, comes first. The
+    // `orbit` CLI ships prebuilt for macOS and Linux, installed by the shell
+    // script; Windows has no CLI build yet, so there we point at the CLI page.
     let orbit = |id: &str, name: &str, binary: &str| {
         let path = crate::shell::which(binary);
-        let how = if cfg!(target_os = "linux") {
-            "or run `curl -fsSL https://orbit.com.ai/install.sh | sh`"
+        let how = if cfg!(target_os = "windows") {
+            "or get the Orbit CLI from https://orbit.com.ai/cli/"
         } else {
-            "or get the Orbit installer from https://orbit.com.ai/download/installer/"
+            "or run `curl -fsSL https://orbit.com.ai/install.sh | sh`"
         };
         Provider {
             id: id.to_string(),
