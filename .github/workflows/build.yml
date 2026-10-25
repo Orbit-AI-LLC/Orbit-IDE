@@ -39,7 +39,7 @@ jobs:
       name: ${{ steps.meta.outputs.name }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The version stamped into the apps is the release's tag without the v,
       # so what an app reports is what Mission Control finds on GitHub.
@@ -83,7 +83,7 @@ jobs:
       # Compiled in for the update check (src-tauri/src/updates.rs).
       ORBIT_BUILD: ${{ needs.version.outputs.build }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -191,7 +191,7 @@ jobs:
       # Compiled in for the update check (src-tauri/src/updates.rs).
       ORBIT_BUILD: ${{ needs.version.outputs.build }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -239,7 +239,7 @@ jobs:
     if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.version.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v4
         with:
